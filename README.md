@@ -41,6 +41,11 @@ After the tests, if a saved network was joined, the board stays connected and st
 - mDNS: `http://<device-name>.local/` and service `_perceptio._tcp` for app discovery (component
   `espressif/mdns`, pulled by `src/idf_component.yml` on first build — needs internet once).
 
+**No known network at boot → fallback access point** `Perceptio-<device id>` (e.g. `Perceptio-d40592485f78`),
+WPA2 password `perceptio`, same web app at `http://192.168.4.1/` (Network tab to add a WiFi). Every 60 s, while no
+phone is connected to the AP, the saved networks are retried; joining one switches the AP off and the cloud link
+starts. The password is the same on every unit — development only, to be replaced before shipping.
+
 The page works on phones (bottom tab bar), follows the system dark/light theme, and needs no internet.
 Tabs: Dashboard · Live (60 fps plots) · Settings (generated from the schema) · Network.
 

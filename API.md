@@ -50,6 +50,7 @@ Max 8 networks. SSID ≤ 32 bytes, password ≤ 64.
 
 | | |
 |---|---|
+| `GET /wifi/scan` | nearby networks, blocks ~2–3 s: `[{ssid, rssi, channel, open}]`, unique SSIDs, strongest first, hidden ones omitted. 409 while a connect attempt is running |
 | `POST /reboot` | `{"ok":true}` then restart ~200 ms later |
 | `GET /ota` | `{phase, running, slot, pending_verify, repo, token_set, token_hint, checked, latest?, asset?, asset_bytes?, published?, update_available?, received_bytes?, total_bytes?, error?}` — phase: idle, checking, downloading, verifying, rebooting, error |
 | `POST /ota/check` | asks GitHub for the latest Release of parameter `ota_repo`; answers like `GET /ota` (poll it while `phase != idle`). 409 while recording/uploading/busy |

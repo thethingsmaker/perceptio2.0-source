@@ -9,6 +9,7 @@
 #include "upload.h"
 #include "power.h"
 #include "ota.h"
+#include "net.h"
 #include "esp_ota_ops.h"
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
@@ -331,6 +332,25 @@ static esp_err_t h_wifi_post(httpd_req_t *r)
     cJSON_Delete(b);
     if (e != ESP_OK) return send_err(r, "400 Bad Request", esp_err_to_name(e));
     return h_wifi_get(r);
+}
+
+static esp_err_t h_wifi_scan(httpd_req_t *r)            /* GET /api/v1/wifi/scan — blocks ~2-3 s */
+{
+    net_ap_t *ap = heap_caps_malloc(24 * sizeof *ap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!ap) return send_err(r, "500 Internal Server Error", "no memory");
+    int n = net_scan_list(ap, 24);
+    if (n < 0) { free(ap); return send_err(r, "409 Conflict", "WiFi busy (connecting) — try again in a few seconds"); }
+    cJSON *a = cJSON_CreateArray();
+    for (int i = 0; i < n; i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "ssid", ap[i].ssid);
+        cJSON_AddNumberToObject(o, "rssi", ap[i].rssi);
+        cJSON_AddNumberToObject(o, "channel", ap[i].channel);
+        cJSON_AddBoolToObject(o, "open", ap[i].open);
+        cJSON_AddItemToArray(a, o);
+    }
+    free(ap);
+    return send_json(r, a, NULL);
 }
 
 static esp_err_t h_wifi_delete(httpd_req_t *r)          /* DELETE /api/v1/wifi/<urlencoded ssid> */
@@ -674,6 +694,7 @@ esp_err_t webui_start(webui_status_fn fn)
         { .uri = "/api/v1/config",    .method = HTTP_PATCH,   .handler = h_config_patch },
         { .uri = "/api/v1/wifi",      .method = HTTP_GET,     .handler = h_wifi_get },
         { .uri = "/api/v1/wifi",      .method = HTTP_POST,    .handler = h_wifi_post },
+        { .uri = "/api/v1/wifi/scan", .method = HTTP_GET,     .handler = h_wifi_scan },
         { .uri = "/api/v1/wifi/*",    .method = HTTP_DELETE,  .handler = h_wifi_delete },
         { .uri = "/api/v1/reboot",    .method = HTTP_POST,    .handler = h_reboot },
         { .uri = "/api/v1/power/off", .method = HTTP_POST,    .handler = h_power_off },

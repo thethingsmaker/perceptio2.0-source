@@ -130,6 +130,7 @@ static bool charge_gate(float board_c)
     return paused;
 }
 
+#define AP_PASSWORD "perceptio"                   /* fallback AP (no known WiFi). Same on every unit: development only */
 static volatile power_btn_t s_btn_event;
 static void on_button(power_btn_t k) { s_btn_event = k; }
 static const char *volatile s_off_request;                 /* set by the UI/cloud; served by the main loop */
@@ -293,7 +294,17 @@ void app_main(void)
         webui_start(status_cb);
         ESP_LOGI(TAG, ">>> http://%s/ <<<  heap %u KB internal (MQTT not yet connected)", net_ip(), (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
     } else {
-        ESP_LOGW(TAG, "no WiFi — UI not reachable (block 5 adds AP fallback)");
+        /* No known network: own access point "Perceptio-<device id>", same UI at http://192.168.4.1/. The saved
+         * networks keep being retried in the background (net.c); joining one switches the AP off. */
+        char ssid[33]; snprintf(ssid, sizeof ssid, "Perceptio-%s", cloud_device_id());
+        if (net_start_ap(ssid, AP_PASSWORD) == ESP_OK) {
+            net_set_power_save(false);
+            net_start_mdns(g_cfg.dev_name, config_fw_version());
+            webui_start(status_cb);
+            ESP_LOGW(TAG, ">>> no WiFi: join '%s' (password '%s') and open http://%s/ <<<", ssid, AP_PASSWORD, net_ip());
+        } else {
+            ESP_LOGE(TAG, "no WiFi and the fallback AP failed — UI not reachable");
+        }
     }
 
     bool healthy = imu_ok && nand_ok && selftest_passed() == selftest_count();

@@ -160,9 +160,12 @@ canvas{display:block;width:100%;height:230px;background:var(--card);border:1px s
   <h2 style="margin-top:0">Saved networks <span class="tag">tried in order at boot</span></h2>
   <div class="card" id="wifilist"></div>
   <h2>Add network</h2>
-  <div class="card"><div class="row" style="flex-wrap:wrap">
-    <input id="ssid" placeholder="SSID" autocapitalize="off" style="flex:1 1 140px">
-    <input id="pass" placeholder="Password" type="password" style="flex:1 1 140px">
+  <div class="card">
+    <div class="row"><div class="l"><b>Nearby networks</b><span>tap one to fill in the name</span></div><button class="btn ghost" id="scanbtn" onclick="scanWifi()">Search</button></div>
+    <div id="scanlist"></div>
+    <div class="row" style="flex-wrap:wrap">
+    <input id="ssid" placeholder="SSID" autocapitalize="off" autocorrect="off" spellcheck="false" style="flex:1 1 140px">
+    <span style="flex:1 1 140px;display:flex;gap:6px"><input id="pass" placeholder="Password" type="password" autocapitalize="off" autocorrect="off" spellcheck="false" style="flex:1;min-width:0"><button class="btn ghost" id="passeye" type="button" onclick="togglePass()" title="Show password">Show</button></span>
     <button class="btn" onclick="addWifi()">Add</button></div></div>
   <h2>Device</h2>
   <div class="card mono" id="devinfo"></div>
@@ -284,7 +287,14 @@ async function reboot(){if(!confirm('Restart the device?'))return;await api('/re
 async function loadWifi(){const l=await api('/wifi');$('wifilist').innerHTML=l.length?l.map((n,i)=>`<div class="row"><div class="l"><b>${esc(n.ssid)}</b><span>${n.open?'open':'WPA2'} · priority ${i+1}</span></div><button class="btn ghost" onclick="delWifi('${esc(n.ssid)}')">Remove</button></div>`).join('')
   :'<div class="row"><div class="l"><span>No networks saved</span></div></div>';}
 async function addWifi(){const ssid=$('ssid').value.trim(),pass=$('pass').value;if(!ssid)return;
-  await api('/wifi',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ssid,pass})});$('ssid').value='';$('pass').value='';toast('Saved');loadWifi()}
+  await api('/wifi',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ssid,pass})});$('ssid').value='';$('pass').value='';$('pass').type='password';$('passeye').textContent='Show';toast('Saved');loadWifi()}
+function bars(r){return r>=-55?'▂▄▆█':r>=-67?'▂▄▆':r>=-78?'▂▄':'▂'}
+async function scanWifi(){const b=$('scanbtn');b.disabled=true;b.textContent='Searching…';
+  try{const l=await api('/wifi/scan');$('scanlist').innerHTML=l.length?l.map(n=>`<div class="row" style="cursor:pointer" onclick="pickWifi(this.dataset.s,${n.open})" data-s="${esc(n.ssid)}"><div class="l"><b>${esc(n.ssid)}</b><span>${n.open?'open':'secured'} · ch ${n.channel} · ${n.rssi} dBm</span></div><span class="mono">${bars(n.rssi)}</span></div>`).join('')
+    :'<div class="row"><div class="l"><span>No networks found</span></div></div>'}catch(e){toast('Search failed: '+e.message,true)}
+  b.disabled=false;b.textContent='Search'}
+function pickWifi(ssid,open){$('ssid').value=ssid;$('pass').value='';if(open){$('pass').placeholder='open network — no password'}else{$('pass').placeholder='Password';$('pass').focus()}}
+function togglePass(){const p=$('pass'),show=p.type==='password';p.type=show?'text':'password';$('passeye').textContent=show?'Hide':'Show';$('passeye').title=show?'Hide password':'Show password'}
 async function delWifi(ssid){await api('/wifi/'+encodeURIComponent(ssid),{method:'DELETE'});toast('Removed');loadWifi()}
 
 /* ---- live plots over WebSocket ---- */
