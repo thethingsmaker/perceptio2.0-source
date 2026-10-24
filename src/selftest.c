@@ -101,15 +101,36 @@ static void t_imu(void)
                  s.v[7] * sc.hg_mg_lsb, s.v[8] * sc.hg_mg_lsb, s.v[9] * sc.hg_mg_lsb);
         vTaskDelay(pdMS_TO_TICKS(100));
     }
-    float a = sqrtf((float)s.v[4] * s.v[4] + (float)s.v[5] * s.v[5] + (float)s.v[6] * s.v[6]) * sc.xl_mg_lsb / 1000;
-    float h = sqrtf((float)s.v[7] * s.v[7] + (float)s.v[8] * s.v[8] + (float)s.v[9] * s.v[9]) * sc.hg_mg_lsb / 1000;
-    float g = sqrtf((float)s.v[1] * s.v[1] + (float)s.v[2] * s.v[2] + (float)s.v[3] * s.v[3]) * sc.gy_mdps_lsb / 1000;
-    record("IMU gravity (low-g)", a > 0.85f && a < 1.15f, "|a| = %.2f g at rest", a);
-    /* ±320 g channel: zero-g offset spec is ~±1-2 g, so it cannot resolve 1 g — check the offset is within spec and log it */
-    record("IMU high-g offset", h < 3.0f, "|a_hg| = %.2f g at rest; per-axis offset vs low-g: %+.2f %+.2f %+.2f g",
-           h, (s.v[7] * sc.hg_mg_lsb - s.v[4] * sc.xl_mg_lsb) / 1000, (s.v[8] * sc.hg_mg_lsb - s.v[5] * sc.xl_mg_lsb) / 1000,
-           (s.v[9] * sc.hg_mg_lsb - s.v[6] * sc.xl_mg_lsb) / 1000);
-    record("IMU gyro at rest", g < 20.0f, "|w| = %.1f dps (expect < 20 while still)", g);
+    /* Motion-independent checks: the device is always handled while it boots, so nothing here assumes it is still.
+     * 50 samples over 0.5 s. A live sensor's raw output always moves by at least a few LSB (noise, even on a table);
+     * a dead or stuck one repeats the same value or sits pinned at full scale. Offsets are not judged here. */
+    int16_t lo[10] = {0}, hi[10] = {0};
+    float asum = 0;
+    for (int i = 0; i < 50; i++) {
+        imu_read_sample(&s);
+        for (int k = 1; k < 10; k++) {
+            if (i == 0 || s.v[k] < lo[k]) lo[k] = s.v[k];
+            if (i == 0 || s.v[k] > hi[k]) hi[k] = s.v[k];
+        }
+        asum += sqrtf((float)s.v[4] * s.v[4] + (float)s.v[5] * s.v[5] + (float)s.v[6] * s.v[6]) * sc.xl_mg_lsb / 1000;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    bool g_live = true, g_pinned = false, a_live = true;
+    for (int k = 1; k <= 3; k++) {
+        if (hi[k] == lo[k]) g_live = false;                       /* frozen axis */
+        if (lo[k] >= 32760 || hi[k] <= -32760) g_pinned = true;   /* every sample at full scale */
+    }
+    for (int k = 4; k <= 6; k++) if (hi[k] == lo[k]) a_live = false;
+    float a = asum / 50;
+    record("IMU accel live", a_live && a > 0.2f && a < 16.0f, "mean |a| = %.2f g over 0.5 s, raw spread %d/%d/%d LSB",
+           a, hi[4] - lo[4], hi[5] - lo[5], hi[6] - lo[6]);
+    /* ±320 g channel vs low-g channel on the same sample: both see the same acceleration, so the difference is the
+     * high-g offset whatever the motion (spec ~±1-2 g; valid while the low-g channel is below its 16 g full scale). */
+    float d[3], dmax = 0;
+    for (int k = 0; k < 3; k++) { d[k] = (s.v[7 + k] * sc.hg_mg_lsb - s.v[4 + k] * sc.xl_mg_lsb) / 1000; if (fabsf(d[k]) > dmax) dmax = fabsf(d[k]); }
+    record("IMU high-g offset", dmax < 3.0f, "high-g minus low-g per axis: %+.2f %+.2f %+.2f g (expect within ±3)", d[0], d[1], d[2]);
+    record("IMU gyro live", g_live && !g_pinned, "raw spread %d/%d/%d LSB over 0.5 s%s",
+           hi[1] - lo[1], hi[2] - lo[2], hi[3] - lo[3], g_pinned ? " — an axis is pinned at full scale" : g_live ? "" : " — an axis never changes");
 
     gpio_config_t io = { .pin_bit_mask = 1ULL << PIN_IMU_INT1, .mode = GPIO_MODE_INPUT, .intr_type = GPIO_INTR_POSEDGE };
     gpio_config(&io);
