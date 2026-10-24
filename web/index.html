@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<title>Perceptio 2.0</title>
+<style>
+:root{
+  --bg:#0f1115;--card:#171a21;--card2:#1e222b;--line:#262b35;--txt:#e8eaf0;--mut:#8b93a5;
+  --acc:#4f8cff;--ok:#3ddc84;--warn:#ffb648;--bad:#ff5f6d;--x:#ff5f6d;--y:#3ddc84;--z:#4f8cff;
+  --r:14px;--sh:0 1px 2px rgba(0,0,0,.4);
+}
+@media (prefers-color-scheme:light){
+  :root{--bg:#f3f5f9;--card:#fff;--card2:#f0f2f6;--line:#e2e5ec;--txt:#141821;--mut:#6b7385;--sh:0 1px 3px rgba(20,24,33,.08)}
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--acc);text-decoration:none}
+header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;padding:14px 18px;padding-top:calc(14px + env(safe-area-inset-top));background:color-mix(in srgb,var(--bg) 85%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+header h1{font-size:17px;font-weight:650;margin:0;letter-spacing:.2px}
+.logo{display:block;height:30px;width:auto}
+@media (prefers-color-scheme:light){.logo{filter:brightness(.45) saturate(1.4)}}
+header .sub{color:var(--mut);font-size:12.5px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--bad);box-shadow:0 0 0 3px color-mix(in srgb,var(--bad) 25%,transparent);transition:.3s}
+.dot.on{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 25%,transparent)}
+.spacer{flex:1}
+nav{display:flex;gap:4px}
+nav button{background:none;border:0;color:var(--mut);font:inherit;font-weight:600;padding:8px 12px;border-radius:10px;cursor:pointer}
+nav button.act{color:var(--txt);background:var(--card2)}
+main{max-width:1100px;margin:0 auto;padding:18px;padding-bottom:calc(18px + env(safe-area-inset-bottom))}
+section{display:none}section.act{display:block}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;box-shadow:var(--sh)}
+.card .k{color:var(--mut);font-size:12.5px;font-weight:600;text-transform:uppercase;letter-spacing:.6px}
+.card .v{font-size:26px;font-weight:650;margin-top:6px;font-variant-numeric:tabular-nums}
+.card .v small{font-size:14px;color:var(--mut);font-weight:500;margin-left:4px}
+.card .n{color:var(--mut);font-size:12.5px;margin-top:4px}
+.bar{height:6px;background:var(--card2);border-radius:3px;margin-top:10px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--ok);border-radius:3px;transition:width .4s,background .4s}
+.bars{display:inline-flex;align-items:flex-end;gap:3px;height:22px;margin-right:10px;vertical-align:-2px}
+.bars i{width:6px;background:var(--line);border-radius:2px}
+.bars i:nth-child(1){height:30%}.bars i:nth-child(2){height:50%}.bars i:nth-child(3){height:75%}.bars i:nth-child(4){height:100%}
+.bars i.on{background:var(--acc)}
+h2{font-size:13px;color:var(--mut);font-weight:650;text-transform:uppercase;letter-spacing:.7px;margin:22px 0 10px}
+.row{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.row:first-of-type{border-top:0}
+.row .l{flex:1;min-width:0}.row .l b{display:block;font-weight:600}.row .l span{color:var(--mut);font-size:12.5px}
+input,select{background:var(--card2);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:9px 12px;font:inherit;min-width:0}
+input:focus,select:focus{outline:2px solid color-mix(in srgb,var(--acc) 50%,transparent);border-color:var(--acc)}
+input[type=number]{width:110px;text-align:right}
+input[type=range]{width:150px;padding:0;background:none;border:0}
+.btn{background:var(--acc);color:#fff;border:0;border-radius:10px;padding:10px 16px;font:inherit;font-weight:600;cursor:pointer;white-space:nowrap}
+.btn.ghost{background:var(--card2);color:var(--txt)}.btn.danger{background:var(--bad)}
+.btn:disabled{opacity:.5;cursor:default}
+.sw{position:relative;width:46px;height:28px;background:var(--card2);border:1px solid var(--line);border-radius:14px;cursor:pointer;transition:.2s;flex:none}
+.sw:after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:var(--mut);transition:.2s}
+.sw.on{background:var(--acc);border-color:var(--acc)}.sw.on:after{left:21px;background:#fff}
+.tag{font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;background:var(--card2);color:var(--mut);margin-left:6px;vertical-align:middle}
+.tag.rb{color:var(--warn)}
+canvas{display:block;width:100%;height:230px;background:var(--card);border:1px solid var(--line);border-radius:var(--r)}
+.leg{display:flex;gap:14px;font-size:12.5px;color:var(--mut);margin:6px 2px 14px}
+.leg i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(20px);background:var(--txt);color:var(--bg);padding:10px 16px;border-radius:10px;font-weight:600;opacity:0;transition:.25s;pointer-events:none;z-index:9}
+.toast.show{opacity:1;transform:translateX(-50%)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+@media (max-width:720px){
+  /* no backdrop-filter here: it would make the header the containing block of the fixed bottom nav */
+  header{padding:12px 16px;padding-top:calc(12px + env(safe-area-inset-top));backdrop-filter:none;background:var(--bg)}
+  nav{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:6px 8px;padding-bottom:calc(6px + env(safe-area-inset-bottom));justify-content:space-around;z-index:5}
+  nav button{flex:1;padding:8px 4px;font-size:12px;display:flex;flex-direction:column;align-items:center;gap:3px}
+  nav button svg{width:22px;height:22px}
+  main{padding:14px;padding-bottom:calc(84px + env(safe-area-inset-bottom))}
+  .card .v{font-size:22px}
+}
+@media (min-width:721px){nav button svg{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <div class="dot" id="dot"></div>
+  <div><img class="logo" src="data:image/png;base64,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" alt="Perceptio 2.0" height="36"><div class="sub"><span id="hname">Perceptio</span> · <span id="hsub">connecting…</span></div></div>
+  <div class="spacer"></div>
+  <nav id="nav">
+    <button data-t="dash" class="act"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg>Dashboard</button>
+    <button data-t="rec"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none"/></svg>Record</button>
+    <button data-t="live"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Live</button>
+    <button data-t="set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</button>
+    <button data-t="net"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M2 9a14 14 0 0 1 20 0"/><circle cx="12" cy="19.5" r="1"/></svg>Network</button>
+  </nav>
+</header>
+
+<main>
+<section id="dash" class="act">
+  <div class="grid">
+    <div class="card"><div class="k">Battery</div><div class="v"><span id="soc">–</span><small>%</small> <svg id="bolt" viewBox="0 0 24 24" width="22" height="22" style="display:none;vertical-align:-3px;margin-left:4px" fill="var(--warn)"><path d="M13 2 3 14h7l-1 8 10-12h-7z"/></svg></div><div class="n" id="chg">–</div><div class="bar"><i id="batbar" style="width:0"></i></div></div>
+    <div class="card"><div class="k">Recording</div><div class="v" id="drec">–</div><div class="n" id="drecn">–</div></div>
+    <div class="card"><div class="k">IMU sampler · core 1</div><div class="v" id="rate">–<small>Hz</small></div><div class="n" id="tot">–</div></div>
+    <div class="card"><div class="k">Peak impact · last 1 s</div><div class="v" id="peak">–<small>g</small></div><div class="n">high-g channel, ±320 g</div></div>
+    <div class="card"><div class="k">Wi-Fi</div><div class="v"><span class="bars" id="bars"><i></i><i></i><i></i><i></i></span><span id="rssi">–</span><small>dBm</small></div><div class="n" id="ip">–</div></div>
+    <div class="card"><div class="k">Clock</div><div class="v" id="clk">–</div><div class="n" id="clkn">–</div></div>
+    <div class="card"><div class="k">Cloud</div><div class="v" id="cloud">–</div><div class="n" id="cloudn">–</div></div>
+    <div class="card"><div class="k">Uptime</div><div class="v" id="up">–</div><div class="n" id="fw">–</div></div>
+    <div class="card"><div class="k">Heap free · core 0</div><div class="v" id="heap">–<small>KB</small></div><div class="n" id="heapmin">–</div></div>
+    <div class="card"><div class="k">IMU temperature</div><div class="v" id="tmp">–<small>°C</small></div><div class="n">die; ≈ ambient + self-heating</div></div>
+    <div class="card"><div class="k">Bring-up tests</div><div class="v" id="tests">–</div><div class="n">at last boot</div></div>
+    <div class="card"><div class="k">API latency</div><div class="v" id="lat">–<small>ms</small></div><div class="n">round trip of /api/v1/status</div></div>
+  </div>
+</section>
+
+<section id="rec">
+  <div class="card" style="margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <div style="flex:1 1 200px"><div class="k">Session</div><div class="v" id="rstate">–</div><div class="n" id="rinfo">–</div></div>
+      <div id="rctl" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <input id="rtag" placeholder="Tag (match / player, optional)" maxlength="64" style="flex:1 1 180px">
+        <button class="btn" id="rstart" onclick="recStart()">● Start</button>
+        <button class="btn danger" id="rstop" onclick="recStop()" style="display:none">■ Stop</button>
+      </div>
+    </div>
+    <div class="bar" style="margin-top:14px"><i id="stbar" style="width:0;background:var(--acc)"></i></div>
+    <div class="n" id="stor">–</div>
+  </div>
+  <div class="card" style="margin-bottom:12px" id="synthcard"><div class="row" style="flex-wrap:wrap"><div class="l"><b>Generate test file</b><span>Synthetic recording through the real pipeline (codec, hashing, upload) — ~1 min per 150 min of data</span></div>
+    <input id="synthmin" type="number" min="1" max="600" value="150" style="width:90px"> <span class="n">min</span>
+    <button class="btn ghost" id="synthbtn" onclick="recSynth()">Generate</button></div></div>
+  <h2>Stored recordings <span class="tag" id="rcount">0</span></h2>
+  <div class="card" id="reclist"><div class="row"><div class="l"><span>loading…</span></div></div></div>
+  <div class="n" style="margin-top:10px">Files are <span class="mono">PCR2</span> (docs/data-v2.md): codec-1 blocks of 400 timestamped samples (~3.6× smaller than raw), CRC per block. Check with the backend's <span class="mono">pcr2_check.py</span>. The short button press on the racket also starts/stops; uploads are started by the backend.</div>
+</section>
+
+<section id="live">
+  <div class="leg"><span><i style="background:var(--x)"></i>X</span><span><i style="background:var(--y)"></i>Y</span><span><i style="background:var(--z)"></i>Z</span>
+    <span class="spacer"></span><span id="lstat">–</span></div>
+  <h2 style="margin-top:0">Accelerometer · g · ±<span id="ar">4</span></h2><canvas id="ca"></canvas>
+  <h2>Gyroscope · dps · ±<span id="gr">1000</span></h2><canvas id="cg"></canvas>
+  <h2>High-g accelerometer · g · ±<span id="hr">8</span> <span class="tag">±320 g full scale</span></h2><canvas id="ch"></canvas>
+</section>
+
+<section id="set">
+  <div id="setform"></div>
+  <h2>Maintenance</h2>
+  <div class="card">
+    <div class="row"><div class="l"><b>Restart device</b><span>Needed after changing parameters marked "restart"</span></div><button class="btn ghost" onclick="reboot()">Restart</button></div>
+    <div class="row"><div class="l"><b>Power off</b><span>Closes a running recording first. With the cable in, the device keeps charging with the UI off; press the button 2 s to turn it back on.</span></div><button class="btn danger" onclick="powerOff()">Power off</button></div>
+  </div>
+  <h2>Self-test at last boot</h2>
+  <div class="card" id="selftest"></div>
+</section>
+
+<section id="net">
+  <h2 style="margin-top:0">Saved networks <span class="tag">tried in order at boot</span></h2>
+  <div class="card" id="wifilist"></div>
+  <h2>Add network</h2>
+  <div class="card"><div class="row" style="flex-wrap:wrap">
+    <input id="ssid" placeholder="SSID" autocapitalize="off" style="flex:1 1 140px">
+    <input id="pass" placeholder="Password" type="password" style="flex:1 1 140px">
+    <button class="btn" onclick="addWifi()">Add</button></div></div>
+  <h2>Device</h2>
+  <div class="card mono" id="devinfo"></div>
+</section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const api=(p,o)=>fetch('/api/v1'+p,o).then(r=>{if(!r.ok)throw new Error(r.status);return r.headers.get('content-type')?.includes('json')?r.json():r.text()});
+function toast(m,bad){const t=$('toast');t.textContent=m;t.style.background=bad?'var(--bad)':'';t.style.color=bad?'#fff':'';t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),1800)}
+
+/* ---- tabs ---- */
+let tab='dash';
+$('nav').onclick=e=>{const b=e.target.closest('button');if(!b)return;tab=b.dataset.t;
+  document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('act',x===b));
+  document.querySelectorAll('main section').forEach(s=>s.classList.toggle('act',s.id===tab));
+  if(tab==='live')openWs();else closeWs();if(tab==='set'){loadSchema();loadSelftest()}if(tab==='net')loadWifi();if(tab==='rec')loadRecs();location.hash=tab};
+if(location.hash){const b=document.querySelector(`nav button[data-t="${location.hash.slice(1)}"]`);b&&b.click()}
+
+/* ---- info + status ---- */
+const CH=['not charging','charging (CC)','charging (CV)','charge completed'];
+let info=null;
+api('/info').then(i=>{info=i;$('hname').textContent=i.name;$('fw').textContent='fw '+i.fw+' · hw rev '+i.hw;
+  $('devinfo').innerHTML=Object.entries(i).map(([k,v])=>`<div class="row"><div class="l"><span>${k}</span></div><div>${v}</div></div>`).join('')}).catch(()=>{});
+async function poll(){const t0=performance.now();try{const s=await api('/status');const dt=performance.now()-t0;
+  $('dot').classList.add('on');$('hsub').textContent=s.ip+' · '+s.rssi+' dBm';
+  $('soc').textContent=s.soc_pct;$('bolt').style.display=(s.chg==1||s.chg==2)?'inline':'none';
+  $('chg').textContent=s.vbat.toFixed(2)+' V · '+(s.vin?'USB · ':'battery · ')+CH[s.chg];
+  const bb=$('batbar');bb.style.width=s.soc_pct+'%';bb.style.background=s.soc_pct<15?'var(--bad)':s.soc_pct<35?'var(--warn)':'var(--ok)';
+  const nb=s.rssi>=-55?4:s.rssi>=-65?3:s.rssi>=-75?2:s.rssi>=-88?1:0;document.querySelectorAll('#bars i').forEach((b,i)=>b.classList.toggle('on',i<nb));
+  $('rate').innerHTML=s.imu_hz+'<small>Hz</small>';$('peak').innerHTML=s.hg_peak_g.toFixed(1)+'<small>g</small>';$('tot').textContent=s.imu_total.toLocaleString()+' samples · '+s.imu_missed+' missed';
+  $('rssi').textContent=s.rssi;$('ip').textContent=s.ip;
+  $('up').textContent=fmtUp(s.uptime);
+  if(s.cloud){const c=s.cloud;const col=c.state==='online'?'var(--ok)':c.state==='waiting for approval'?'var(--warn)':c.state==='off'?'var(--mut)':'var(--bad)';
+    $('cloud').innerHTML='<span style="color:'+col+'">'+c.state+'</span>';
+    $('cloudn').textContent=(c.enrolled?'enrolled':'not enrolled')+' · id '+c.device_id+' · boot #'+c.boot_id+(c.events_pending?' · '+c.events_pending+' events queued':'')+(c.cmds?' · last cmd '+c.last_cmd:'');}
+  if(s.time){const t=s.time;if(t.valid){$('clk').textContent=t.local.replace(/ [A-Z]+$/,'');$('clk').style.color='';
+      $('clkn').textContent=(t.source==='ntp'?'NTP sync':t.source==='app'?'set by app':t.source==='rtc'?'kept by RTC':'unknown')+(t.last_sync?' · '+fmtAge(t.age_s)+' ago':'')+' · '+t.local.split(' ').pop();}
+    else{$('clk').textContent='not set';$('clk').style.color='var(--warn)';$('clkn').innerHTML='no internet yet · <a href="#" onclick="setTime();return false">set from this device</a>';}}$('heap').innerHTML=(s.heap_free/1024).toFixed(0)+'<small>KB</small>';$('heapmin').textContent='min '+(s.heap_min/1024).toFixed(0)+' KB';
+  $('tmp').innerHTML=s.imu_temp.toFixed(1)+'<small>°C</small>';
+  $('tests').innerHTML=`<span style="color:var(--${s.tests_pass==s.tests_total?'ok':'bad'})">${s.tests_pass}/${s.tests_total}</span>`;
+  $('lat').innerHTML=dt.toFixed(0)+'<small>ms</small>';
+  upl=s.upload;if(s.rec)recLive(s.rec);
+ }catch(e){$('dot').classList.remove('on');$('hsub').textContent='offline';}}
+function fmtAge(s){return s<60?s+' s':s<3600?Math.floor(s/60)+' min':s<86400?Math.floor(s/3600)+' h':Math.floor(s/86400)+' d'}
+async function setTime(){await api('/time',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({epoch:Math.floor(Date.now()/1000)})});toast('Clock set');poll()}
+function fmtUp(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m ${s%60}s`}
+setInterval(poll,1000);poll();
+
+/* ---- recording ---- */
+let recState='idle',recListStale=true,upl=null;
+function fmtMs(ms){const s=Math.floor(ms/1000),h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return(h?h+':':'')+String(m).padStart(h?2:1,'0')+':'+String(x).padStart(2,'0')}
+function fmtMB(b){return b>=1048576?(b/1048576).toFixed(1)+' MB':(b/1024).toFixed(0)+' KB'}
+function recLive(r){const on=r.state!=='idle';
+  if(on!==(recState!=='idle')){recListStale=true}recState=r.state;
+  $('drec').innerHTML=on?'<span style="color:var(--bad)">● '+fmtMs(r.elapsed_ms)+'</span>':'idle';
+  $('drecn').textContent=on?(r.rec_tag||r.rec_id)+' · '+r.samples.toLocaleString()+' samples'+(r.dropped?' · '+r.dropped+' dropped':''):r.count+' stored · '+r.free_mb+' MB free';
+  $('rstate').innerHTML=on?'<span style="color:var(--bad)">● REC '+fmtMs(r.elapsed_ms)+'</span>':r.state==='stopping'?'stopping…':'Idle';
+  $('rinfo').textContent=on?(r.rec_tag?r.rec_tag+' · ':'')+r.rec_id+' · '+r.samples.toLocaleString()+' samples · '+fmtMB(r.pages*2032)+(r.dropped?' · '+r.dropped+' DROPPED':'')+' · backlog max '+r.backlog_max:(upl&&upl.phase!=='idle'?'uploading '+upl.rec_id+' · '+upl.phase+' · '+(upl.total_bytes?Math.floor(upl.sent_bytes/upl.total_bytes*100):0)+' %'+(upl.retries?' · '+upl.retries+' retries':''):'ready');
+  $('rstart').style.display=on?'none':'';$('rstop').style.display=on?'':'none';$('rtag').style.display=on?'none':'';$('synthbtn').disabled=on;
+  const used=r.total_mb-r.free_mb;$('stbar').style.width=(r.total_mb?used/r.total_mb*100:0)+'%';
+  $('stor').textContent='Storage: '+used+' of '+r.total_mb+' MB used · '+r.free_mb+' MB free ≈ '+Math.floor(r.free_mb/1.15)+' min at 960 Hz';
+  /* refresh the list when the inventory changed (count), when an upload runs or has just ended, on tab entry */
+  if(r.count!==window._rc){window._rc=r.count;recListStale=true}
+  const upOn=!!(upl&&upl.phase!=='idle');if(window._upOn&&!upOn)recListStale=true;window._upOn=upOn;
+  if(tab==='rec'&&recListStale&&!on){recListStale=false;loadRecs()}
+  if(tab==='rec'&&upOn&&Date.now()-(window._ll||0)>5000){window._ll=Date.now();loadRecs()}}
+async function recStart(){try{const r=await api('/recordings/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({rec_tag:$('rtag').value.trim()})});toast('Recording '+r.rec_id);poll()}catch(e){toast('Start failed: '+e.message,true)}}
+async function recSynth(){const m=+$('synthmin').value||150;try{await api('/recordings/synthetic',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({minutes:m,rec_tag:'synthetic-'+m+'min'})});toast('Generating '+m+' min…');poll()}catch(e){toast('Generate failed: '+e.message,true)}}
+async function recStop(){try{const r=await api('/recordings/stop',{method:'POST'});toast('Stopped · '+r.samples.toLocaleString()+' samples');recListStale=true;poll()}catch(e){toast('Stop failed: '+e.message,true)}}
+async function loadRecs(){const l=await api('/recordings');const a=l.recordings.sort((x,y)=>(y.started_utc_ms||0)-(x.started_utc_ms||0));$('rcount').textContent=a.length;
+  $('reclist').innerHTML=a.length?a.map(r=>`<div class="row"><div class="l"><b>${esc(r.rec_tag||'(no tag)')}${r.complete?'':'<span class="tag" style="color:var(--warn)">incomplete</span>'}</b><span>${r.started_utc_ms?new Date(r.started_utc_ms).toLocaleString():'clock not set'} · ${fmtMs(r.duration_ms)} · ${r.samples.toLocaleString()} samples · ${fmtMB(r.bytes)}${r.dropped?' · '+r.dropped+' dropped':''}${r.uploaded_bytes?' · uploaded '+Math.min(100,Math.round(r.uploaded_bytes/r.bytes*100))+' %':''}<br><span class="mono">${r.rec_id}</span></span></div><a class="btn ghost" href="/api/v1/recordings/${r.rec_id}" download="${r.rec_id}.pcr2">Download</a><button class="btn ghost" onclick="delRec('${r.rec_id}')">Delete</button></div>`).join('')
+  :'<div class="row"><div class="l"><span>No recordings stored</span></div></div>';}
+async function delRec(id){if(!confirm('Delete '+id+'?'))return;try{await api('/recordings/'+id,{method:'DELETE'});toast('Deleted');loadRecs();poll()}catch(e){toast('Delete failed: '+e.message,true)}}
+
+/* ---- settings from schema ---- */
+let schema=null;
+async function loadSchema(){const [sc,cfg]=await Promise.all([api('/schema'),api('/config')]);schema=sc;
+  const groups={};sc.forEach(p=>(groups[p.group]??=[]).push(p));
+  $('setform').innerHTML=Object.entries(groups).map(([g,ps])=>`<h2${g===Object.keys(groups)[0]?' style="margin-top:0"':''}>${g}</h2><div class="card">`+ps.map(p=>row(p,cfg[p.key])).join('')+'</div>').join('');}
+function row(p,v){const rb=p.reboot?'<span class="tag rb">restart</span>':'';const lbl=`<div class="l"><b>${p.label}${rb}</b><span>${p.key}${p.unit?' · '+p.unit:''}${p.type==='int'&&!p.options?' · '+p.min+'–'+p.max:''}</span></div>`;
+  if(p.type==='bool')return`<div class="row">${lbl}<div class="sw ${v?'on':''}" onclick="setP('${p.key}',!this.classList.contains('on'),this)"></div></div>`;
+  if(p.type==='str')return`<div class="row">${lbl}<input value="${esc(v)}" maxlength="${p.max}" onchange="setP('${p.key}',this.value,this)"></div>`;
+  if(p.options)return`<div class="row">${lbl}<select onchange="setP('${p.key}',+this.value,this)">${p.options.map(o=>`<option ${o==v?'selected':''}>${o}</option>`).join('')}</select></div>`;
+  if(p.key==='led_bright')return`<div class="row">${lbl}<input type="range" min="${p.min}" max="${p.max}" value="${v}" oninput="this.nextElementSibling.textContent=this.value" onchange="setP('${p.key}',+this.value,this)"><b style="width:36px;text-align:right">${v}</b></div>`;
+  return`<div class="row">${lbl}<input type="number" min="${p.min}" max="${p.max}" value="${v}" onchange="setP('${p.key}',+this.value,this)"></div>`;}
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function setP(k,v,el){try{const r=await api('/config',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({[k]:v})});
+  if(r.errors&&Object.keys(r.errors).length){toast(k+': '+r.errors[k],true);loadSchema();return}
+  if(el&&el.classList.contains('sw'))el.classList.toggle('on',v);
+  const p=schema.find(x=>x.key===k);toast(p.reboot?'Saved · restart to apply':'Saved');}catch(e){toast('Save failed',true);loadSchema()}}
+async function loadSelftest(){const t=await api('/selftest');$('selftest').innerHTML=t.results.map(r=>`<div class="row"><div class="l"><b>${esc(r.name)}</b><span>${esc(r.info)}</span></div><b style="color:var(--${r.pass?'ok':'bad'})">${r.pass?'PASS':'FAIL'}</b></div>`).join('')||'<div class="row"><div class="l"><span>not run</span></div></div>'}
+async function powerOff(){let rec=false;try{const s=await api('/status');rec=s.rec&&s.rec.state==='recording'}catch(e){}if(!confirm('Power off the device?'+(rec?'\n\nThe running recording will be closed and saved.':'')))return;try{const r=await api('/power/off',{method:'POST'});toast(r.mode==='charge_idle'?'Powering off — charging continues, UI unavailable':'Powering off');setTimeout(()=>{document.getElementById('hsub').textContent='off'},3000)}catch(e){toast('Power off failed: '+e.message,true)}}
+async function reboot(){if(!confirm('Restart the device?'))return;await api('/reboot',{method:'POST'});toast('Restarting…');setTimeout(()=>location.reload(),6000)}
+
+/* ---- wifi ---- */
+async function loadWifi(){const l=await api('/wifi');$('wifilist').innerHTML=l.length?l.map((n,i)=>`<div class="row"><div class="l"><b>${esc(n.ssid)}</b><span>${n.open?'open':'WPA2'} · priority ${i+1}</span></div><button class="btn ghost" onclick="delWifi('${esc(n.ssid)}')">Remove</button></div>`).join('')
+  :'<div class="row"><div class="l"><span>No networks saved</span></div></div>';}
+async function addWifi(){const ssid=$('ssid').value.trim(),pass=$('pass').value;if(!ssid)return;
+  await api('/wifi',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ssid,pass})});$('ssid').value='';$('pass').value='';toast('Saved');loadWifi()}
+async function delWifi(ssid){await api('/wifi/'+encodeURIComponent(ssid),{method:'DELETE'});toast('Removed');loadWifi()}
+
+/* ---- live plots over WebSocket ---- */
+const N=2880;const A=[0,1,2].map(()=>new Float32Array(N)),G=[0,1,2].map(()=>new Float32Array(N)),H=[0,1,2].map(()=>new Float32Array(N));
+let head=0,fill=0,seq=-1,drop=0,sps=0,frames=0,lastT=0,ws=null,raf=0,ar=4,gr=1000,hr=8,XLS=0.000488,GYS=0.14,HGS=0.010417,SB=20;
+function openWs(){if(ws)return;ws=new WebSocket('ws://'+location.host+'/ws');ws.binaryType='arraybuffer';
+  if(info){XLS=info.xl_mg_lsb/1000;GYS=info.gy_mdps_lsb/1000;HGS=info.hg_mg_lsb/1000;SB=info.sample_bytes||20}
+  ws.onmessage=e=>{const v=new DataView(e.data);const s=v.getUint32(0,true);if(seq>=0&&s!==seq)drop+=s-seq;const n=(e.data.byteLength-4)/SB;
+    for(let i=0;i<n;i++){const o=4+i*SB;G[0][head]=v.getInt16(o+2,true)*GYS;G[1][head]=v.getInt16(o+4,true)*GYS;G[2][head]=v.getInt16(o+6,true)*GYS;
+      A[0][head]=v.getInt16(o+8,true)*XLS;A[1][head]=v.getInt16(o+10,true)*XLS;A[2][head]=v.getInt16(o+12,true)*XLS;
+      if(SB>=20){H[0][head]=v.getInt16(o+14,true)*HGS;H[1][head]=v.getInt16(o+16,true)*HGS;H[2][head]=v.getInt16(o+18,true)*HGS}
+      head=(head+1)%N;if(fill<N)fill++;}
+    seq=s+n;sps+=n};
+  ws.onclose=()=>{ws=null;if(tab==='live')setTimeout(openWs,1000)};
+  if(!raf)raf=requestAnimationFrame(loop)}
+function closeWs(){if(ws){ws.onclose=null;ws.close();ws=null}cancelAnimationFrame(raf);raf=0}
+const COL=['--x','--y','--z'].map(v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim());
+function fit(c){const r=c.getBoundingClientRect(),d=devicePixelRatio||1;if(c.width!==Math.round(r.width*d)){c.width=Math.round(r.width*d);c.height=Math.round(r.height*d)}}
+function draw(c,D,range){fit(c);const x=c.getContext('2d'),w=c.width,h=c.height,d=devicePixelRatio||1;x.clearRect(0,0,w,h);
+  x.strokeStyle=getComputedStyle(c).borderColor;x.lineWidth=1;x.beginPath();x.moveTo(0,h/2);x.lineTo(w,h/2);x.stroke();
+  const start=(head-fill+N)%N;for(let k=0;k<3;k++){x.strokeStyle=COL[k];x.lineWidth=1.3*d;x.beginPath();
+    for(let i=0;i<fill;i++){const v=D[k][(start+i)%N],px=(N-fill+i)/N*w,py=h/2-v/range*h/2;i?x.lineTo(px,py):x.moveTo(px,py)}x.stroke()}}
+function autorange(D,min){let m=min;for(let k=0;k<3;k++)for(let i=0;i<fill;i++){const a=Math.abs(D[k][i]);if(a>m)m=a}return Math.ceil(m*1.1*10)/10}
+function loop(t){frames++;if(t-lastT>=1000){$('lstat').textContent=`${frames} fps · ${sps} samples/s · ${drop} dropped`;ar=autorange(A,2);gr=autorange(G,250);hr=autorange(H,4);$('ar').textContent=ar;$('gr').textContent=gr;$('hr').textContent=hr;frames=0;sps=0;lastT=t}
+  draw($('ca'),A,ar);draw($('cg'),G,gr);draw($('ch'),H,hr);raf=requestAnimationFrame(loop)}
+</script>
+</body>
+</html>

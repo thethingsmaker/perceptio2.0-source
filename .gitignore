@@ -1,0 +1,12 @@
+.pio/
+.vscode/
+.cache/
+sdkconfig
+sdkconfig.old
+sdkconfig.perceptio2
+compile_commands.json
+managed_components/
+include/wifi_defaults.h
+include/cloud_secrets.h
+tools/p2_token.txt
+logs/
