@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0f1115">
-<title>Perceptio 2.0</title>
+<title>Perceptio2.0</title>
 <style>
 :root{
   --bg:#0f1115;--card:#171a21;--card2:#1e222b;--line:#262b35;--txt:#e8eaf0;--mut:#8b93a5;
@@ -186,10 +186,10 @@ if(location.hash){const b=document.querySelector(`nav button[data-t="${location.
 /* ---- info + status ---- */
 const CH=['not charging','charging (CC)','charging (CV)','charge completed'];
 let info=null;
-api('/info').then(i=>{info=i;$('hname').textContent=i.name;$('fw').textContent='fw '+i.fw+' · hw rev '+i.hw;
+api('/info').then(i=>{info=i;$('hname').textContent=i.name;if(i.title)document.title=i.title;$('fw').textContent='fw '+i.fw+' · hw rev '+i.hw;
   $('devinfo').innerHTML=Object.entries(i).map(([k,v])=>`<div class="row"><div class="l"><span>${k}</span></div><div>${v}</div></div>`).join('')}).catch(()=>{});
 async function poll(){const t0=performance.now();try{const s=await api('/status');const dt=performance.now()-t0;
-  $('dot').classList.add('on');$('hsub').textContent=s.ip+' · '+s.rssi+' dBm';
+  $('dot').classList.add('on');$('hsub').textContent=s.ip+' · '+s.rssi+' dBm';if(s.title&&document.title!==s.title)document.title=s.title;
   $('soc').textContent=s.soc_pct;$('bolt').style.display=(s.chg==1||s.chg==2)?'inline':'none';
   $('chg').textContent=s.vbat.toFixed(2)+' V · '+(s.vin?'USB · ':'battery · ')+CH[s.chg];
   const bb=$('batbar');bb.style.width=s.soc_pct+'%';bb.style.background=s.soc_pct<15?'var(--bad)':s.soc_pct<35?'var(--warn)':'var(--ok)';

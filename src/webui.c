@@ -42,6 +42,17 @@ static void cors(httpd_req_t *r)
     httpd_resp_set_hdr(r, "Access-Control-Allow-Headers", "Content-Type");
 }
 
+/* Browser title "Perceptio2.0-<xxx>-<yyy>": xxx = last octet of the current IP ("000" when offline),
+ * yyy = reserved for future use (TITLE_YYY until it gets a meaning). */
+#define TITLE_YYY "000"
+static void board_title(const char *ip, char out[40])
+{
+    const char *dot = ip ? strrchr(ip, '.') : NULL;
+    int oct = dot ? atoi(dot + 1) : 0;
+    if (!ip || !*ip || strcmp(ip, "0.0.0.0") == 0) oct = 0;
+    snprintf(out, 40, "Perceptio2.0-%03d-%s", oct, TITLE_YYY);
+}
+
 static esp_err_t send_json(httpd_req_t *r, cJSON *j, const char *status)
 {
     char *s = cJSON_PrintUnformatted(j);
@@ -128,6 +139,7 @@ static esp_err_t h_info(httpd_req_t *r)
     char qr[20]; snprintf(qr, sizeof qr, "P2:%s", cloud_device_id());
     cJSON_AddStringToObject(j, "qr", qr);
     cJSON_AddStringToObject(j, "ip", st.ip);
+    { char t[40]; board_title(st.ip, t); cJSON_AddStringToObject(j, "title", t); }
     cJSON_AddStringToObject(j, "idf", esp_get_idf_version());
     cJSON_AddNumberToObject(j, "chip_rev", ci.revision);
     cJSON_AddNumberToObject(j, "odr_hz", st.odr_hz);
@@ -159,6 +171,7 @@ static esp_err_t h_status(httpd_req_t *r)
     cJSON_AddNumberToObject(j, "chg", (st.bq_stat0 >> 5) & 3);
     cJSON_AddNumberToObject(j, "rssi", st.rssi);
     cJSON_AddStringToObject(j, "ip", st.ip);
+    { char t[40]; board_title(st.ip, t); cJSON_AddStringToObject(j, "title", t); }
     cJSON_AddNumberToObject(j, "imu_hz", st.imu_rate_hz);
     cJSON_AddNumberToObject(j, "imu_total", st.imu_total);
     cJSON_AddNumberToObject(j, "imu_missed", st.imu_missed);

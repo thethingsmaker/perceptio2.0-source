@@ -26,6 +26,8 @@ Working style: metric units, English or Italian, no fluff, verify against datash
 - WiFi modem sleep adds 100–300 ms per HTTP request → `esp_wifi_set_ps(WIFI_PS_NONE)` while the UI is in use (parameter `wifi_ps`).
 - The web page is just a client of `/api/v1` (see `API.md`); the mobile app uses the same API. Parameters are self-describing (`GET /api/v1/schema` from `PARAM_TABLE` in `src/config.c`) — add a parameter = one table line, never hard-code keys in clients.
 - Passwords never leave the device over the API.
+- **Versioning**: every change committed to the PC bumps the patch number in `include/config.h` (`FW_VERSION_PATCH` + `FW_VERSION_STR`, kept equal) — 0.3.2, 0.3.3, … until Alberto calls 0.4.0. GitHub release tags are `v<FW_VERSION_STR>`; the OTA check compares them numerically.
+- I2C driver and GPIO ISR service are installed from a core-1 task (`board.c`): with the I2C ISR on core 0, TLS load made transactions time out and the legacy driver's FSM reset storm tripped the interrupt watchdog. The BQ25180 charge profile (VBAT_CTRL 0x46, CHARGECTRL0/1) is written as absolute values at every boot — corrupted registers (VBATREG 3.51 V) once made it report "charging" with zero current.
 
 ## PlatformIO quirks learned here
 
