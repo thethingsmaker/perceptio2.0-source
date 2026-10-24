@@ -20,8 +20,8 @@
 
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 3
-#define FW_VERSION_PATCH 0
-#define FW_VERSION_STR   "0.3.0"
+#define FW_VERSION_PATCH 1
+#define FW_VERSION_STR   "0.3.1"
 
 /* ------------------------------------------------------------------ */
 /* WiFi list                                                           */
@@ -80,12 +80,14 @@ typedef struct {
     char    tz[48];          /* POSIX TZ string for local time display, e.g. "CET-1CEST,M3.5.0,M10.5.0/3" */
     bool    log_serial;      /* log lines on the USB serial console (off for the ship build) */
     int32_t log_remote;      /* minimum level shipped to the backend: 0 none, 1 error, 2 warning, 3 info */
+    char    ota_repo[80];    /* GitHub "owner/repo" whose latest Release carries the firmware .bin (ota.h) */
 } cfg_values_t;
 
 extern cfg_values_t g_cfg;
 
 esp_err_t config_init(void);
 const char *config_fw_version(void);
+const char *config_prev_fw_version(void);   /* version stored in NVS by the previous boot when it differs ("" otherwise) */
 
 /* registry access */
 int                 config_param_count(void);

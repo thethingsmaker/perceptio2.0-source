@@ -96,6 +96,26 @@ the sampler is `xTaskCreatePinnedToCore(..., 1)` and installs the GPIO ISR servi
   40 MB codec-1 match in ~75–90 s. The levers and dead ends are in CLAUDE.md ("Memory and upload throughput"). Throughput settings in `sdkconfig.defaults` (64 KB TCP windows, Wi-Fi/lwIP buffers in
   PSRAM, 16 KB TLS records) per `docs/firmware-upload-speed.md`. The racket never deletes on its own — `delete_recording` does.
 
+## Firmware update (`src/ota.c`) — GitHub Releases
+
+Settings → Firmware update, or `POST /api/v1/ota/check` + `/install`. Source = the latest Release of the repository in
+parameter `ota_repo` (default `thethingsmaker/perceptio2.0-firmware`); the first asset whose name ends in `.bin` is the
+image. Private repo: store a GitHub token once (Settings → GitHub token → NVS `ota_pat`; a fine-grained token with
+*Contents: read* on that repository is enough). The token is never returned by any API and never logged.
+
+Flow: `GET api.github.com/repos/<repo>/releases/latest` → `tag_name`, asset API url → `GET <asset url>` with
+`Accept: application/octet-stream` and `disable_auto_redirect` → the 302 `Location` (signed CDN URL) is fetched **without**
+the Authorization header (the CDN rejects two credentials) → `esp_https_ota` into the spare slot → reboot. The new image
+boots `PENDING_VERIFY` (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`); `main` marks it valid once the cloud is online (or
+after 90 s offline), never during a session; any reset before that rolls back to the previous slot. Deliberate restarts
+(UI Restart, Power off) mark the image valid first. First boot after an update publishes `fw_updated {from, to}`.
+
+Refused while recording or uploading (internal-flash rule). Needs ~30 KB internal heap (idle ≈ 37 KB).
+
+Publishing a release: bump `FW_VERSION_STR` in `include/config.h` to match the tag (`v0.3.1` ↔ `0.3.1`), build, attach
+`.pio/build/perceptio2/firmware.bin` to a GitHub Release with that tag. If the tag and `FW_VERSION_STR` differ the UI
+keeps reporting "update available".
+
 ## Remote log (`src/rlog.c`)
 
 - Every `ESP_LOGx` line is captured by an `esp_log_set_vprintf` hook into a 32 KB PSRAM ring and published by the cloud

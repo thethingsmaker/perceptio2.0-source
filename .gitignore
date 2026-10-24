@@ -9,4 +9,5 @@ managed_components/
 include/wifi_defaults.h
 include/cloud_secrets.h
 tools/p2_token.txt
+res/pat.txt
 logs/

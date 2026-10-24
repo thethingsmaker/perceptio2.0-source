@@ -139,6 +139,14 @@ canvas{display:block;width:100%;height:230px;background:var(--card);border:1px s
 
 <section id="set">
   <div id="setform"></div>
+  <h2>Firmware update</h2>
+  <div class="card" id="otacard">
+    <div class="row"><div class="l"><b>Running <span id="otarun">–</span></b><span id="otaslot">–</span></div><button class="btn ghost" id="otachk" onclick="otaCheck()">Check for updates</button></div>
+    <div class="row" id="otalatest" style="display:none"><div class="l"><b>Latest <span id="otatag">–</span></b><span id="otainfo">–</span></div><button class="btn" id="otainst" onclick="otaInstall()">Install</button></div>
+    <div class="row"><div class="l"><b>GitHub token</b><span id="otatok">–</span></div><div style="display:flex;gap:8px"><input id="otapat" type="password" placeholder="ghp_… / github_pat_…" maxlength="120" style="width:180px" autocomplete="off"><button class="btn ghost" onclick="otaToken()">Save</button></div></div>
+    <div class="bar" id="otabarw" style="display:none"><i id="otabar" style="width:0;background:var(--acc)"></i></div>
+    <div class="n" id="otamsg" style="margin-top:8px"></div>
+  </div>
   <h2>Maintenance</h2>
   <div class="card">
     <div class="row"><div class="l"><b>Restart device</b><span>Needed after changing parameters marked "restart"</span></div><button class="btn ghost" onclick="reboot()">Restart</button></div>
@@ -164,7 +172,7 @@ canvas{display:block;width:100%;height:230px;background:var(--card);border:1px s
 
 <script>
 const $=id=>document.getElementById(id);
-const api=(p,o)=>fetch('/api/v1'+p,o).then(r=>{if(!r.ok)throw new Error(r.status);return r.headers.get('content-type')?.includes('json')?r.json():r.text()});
+const api=(p,o)=>fetch('/api/v1'+p,o).then(async r=>{if(!r.ok){let m=r.status;try{const j=await r.json();if(j.error)m=j.error}catch(e){}throw new Error(m)}return r.headers.get('content-type')?.includes('json')?r.json():r.text()});
 function toast(m,bad){const t=$('toast');t.textContent=m;t.style.background=bad?'var(--bad)':'';t.style.color=bad?'#fff':'';t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),1800)}
 
 /* ---- tabs ---- */
@@ -172,7 +180,7 @@ let tab='dash';
 $('nav').onclick=e=>{const b=e.target.closest('button');if(!b)return;tab=b.dataset.t;
   document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('act',x===b));
   document.querySelectorAll('main section').forEach(s=>s.classList.toggle('act',s.id===tab));
-  if(tab==='live')openWs();else closeWs();if(tab==='set'){loadSchema();loadSelftest()}if(tab==='net')loadWifi();if(tab==='rec')loadRecs();location.hash=tab};
+  if(tab==='live')openWs();else closeWs();if(tab==='set'){loadSchema();loadSelftest();otaLoad()}if(tab==='net')loadWifi();if(tab==='rec')loadRecs();location.hash=tab};
 if(location.hash){const b=document.querySelector(`nav button[data-t="${location.hash.slice(1)}"]`);b&&b.click()}
 
 /* ---- info + status ---- */
@@ -248,6 +256,27 @@ async function setP(k,v,el){try{const r=await api('/config',{method:'PATCH',head
   if(el&&el.classList.contains('sw'))el.classList.toggle('on',v);
   const p=schema.find(x=>x.key===k);toast(p.reboot?'Saved · restart to apply':'Saved');}catch(e){toast('Save failed',true);loadSchema()}}
 async function loadSelftest(){const t=await api('/selftest');$('selftest').innerHTML=t.results.map(r=>`<div class="row"><div class="l"><b>${esc(r.name)}</b><span>${esc(r.info)}</span></div><b style="color:var(--${r.pass?'ok':'bad'})">${r.pass?'PASS':'FAIL'}</b></div>`).join('')||'<div class="row"><div class="l"><span>not run</span></div></div>'}
+/* ---- firmware update ---- */
+let otaTimer=0;
+function otaRender(o){$('otarun').textContent=o.running;$('otaslot').textContent='slot '+o.slot+(o.pending_verify?' · pending verify':'')+' · '+o.repo;
+  $('otatok').textContent=o.token_set?'set · '+o.token_hint:'not set (public repo only)';
+  if(o.checked){$('otalatest').style.display='';$('otatag').textContent=o.latest;$('otainfo').textContent=o.asset+' · '+(o.asset_bytes/1024|0)+' KB · '+(o.published||'').slice(0,10);
+    $('otainst').textContent=o.update_available?'Install '+o.latest:'Reinstall';}
+  const busy=o.phase!=='idle'&&o.phase!=='error';$('otachk').disabled=busy;$('otainst').disabled=busy;
+  $('otabarw').style.display=o.phase==='downloading'?'':'none';
+  if(o.phase==='downloading'){const pct=o.total_bytes?Math.round(100*o.received_bytes/o.total_bytes):0;$('otabar').style.width=pct+'%';$('otamsg').textContent='Downloading… '+pct+'% ('+(o.received_bytes/1024|0)+' / '+(o.total_bytes/1024|0)+' KB)';}
+  else if(o.phase==='checking')$('otamsg').textContent='Checking GitHub…';
+  else if(o.phase==='verifying')$('otamsg').textContent='Verifying image…';
+  else if(o.phase==='rebooting'){$('otamsg').textContent='Installed — rebooting. This page reloads in 15 s.';setTimeout(()=>location.reload(),15000);}
+  else if(o.phase==='error')$('otamsg').textContent='Error: '+o.error;
+  else $('otamsg').textContent=o.checked?(o.update_available?'Update available.':'Up to date.'):'';
+  clearTimeout(otaTimer);if(busy)otaTimer=setTimeout(otaLoad,1000);}
+async function otaLoad(){try{otaRender(await api('/ota'))}catch(e){}}
+async function otaCheck(){try{otaRender(await api('/ota/check',{method:'POST'}))}catch(e){toast('Check failed: '+e.message,true)}}
+async function otaInstall(){const tag=$('otatag').textContent;if(!confirm('Install firmware '+tag+'?\n\nThe device downloads it to the spare slot, verifies it and reboots. The UI is unavailable for about 30 s.'))return;
+  try{otaRender(await api('/ota/install',{method:'POST'}))}catch(e){toast('Install failed: '+e.message,true)}}
+async function otaToken(){const t=$('otapat').value.trim();if(!t&&!confirm('Clear the stored token?'))return;
+  try{otaRender(await api('/ota/token',{method:'POST',body:JSON.stringify({token:t})}));$('otapat').value='';toast(t?'Token stored':'Token cleared')}catch(e){toast('Token: '+e.message,true)}}
 async function powerOff(){let rec=false;try{const s=await api('/status');rec=s.rec&&s.rec.state==='recording'}catch(e){}if(!confirm('Power off the device?'+(rec?'\n\nThe running recording will be closed and saved.':'')))return;try{const r=await api('/power/off',{method:'POST'});toast(r.mode==='charge_idle'?'Powering off — charging continues, UI unavailable':'Powering off');setTimeout(()=>{document.getElementById('hsub').textContent='off'},3000)}catch(e){toast('Power off failed: '+e.message,true)}}
 async function reboot(){if(!confirm('Restart the device?'))return;await api('/reboot',{method:'POST'});toast('Restarting…');setTimeout(()=>location.reload(),6000)}
 

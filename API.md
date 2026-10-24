@@ -51,6 +51,10 @@ Max 8 networks. SSID ≤ 32 bytes, password ≤ 64.
 | | |
 |---|---|
 | `POST /reboot` | `{"ok":true}` then restart ~200 ms later |
+| `GET /ota` | `{phase, running, slot, pending_verify, repo, token_set, token_hint, checked, latest?, asset?, asset_bytes?, published?, update_available?, received_bytes?, total_bytes?, error?}` — phase: idle, checking, downloading, verifying, rebooting, error |
+| `POST /ota/check` | asks GitHub for the latest Release of parameter `ota_repo`; answers like `GET /ota` (poll it while `phase != idle`). 409 while recording/uploading/busy |
+| `POST /ota/install` | downloads the `.bin` asset of the last check into the spare slot, verifies, reboots (~30 s offline). 409 without a prior check. The new image must be confirmed by a healthy boot or the bootloader rolls back |
+| `POST /ota/token` | `{"token":"ghp_…"}` stores the GitHub token in NVS (`""` clears). Never returned: `GET /ota` gives `token_hint` ("ghp_…1234") only |
 | `POST /power/off` | `{"ok":true,"mode":"ship"\|"charge_idle","recording_closed":bool}` — same as the 5 s button press: closes a running recording, notifies the backend (`shutdown`), then ship mode; with a cable in, reboots into CHARGE-IDLE (UI off, charging on; 2 s button press turns it back on) |
 | `GET /selftest` | results of the self-test run at boot: `{passed, total, results:[{name, pass, info}]}` |
 | `POST /time` | `{"epoch": <seconds since 1970, UTC>}` — the app should call this on every connection when `status.time.valid` is false or `source` is not `ntp` (no backup battery: time is lost in ship mode). Returns `{epoch, local}`. |

@@ -32,7 +32,9 @@ cfg_values_t g_cfg = {
     .tz              = "CET-1CEST,M3.5.0,M10.5.0/3",
     .log_serial = true,
     .log_remote = 3,
+    .ota_repo   = "thethingsmaker/perceptio2.0-firmware",
 };
+static char s_prev_fw[16];
 
 /* ---- the registry: one line per editable parameter ---------------- */
 #define P_I(k, l, g, u, f, lo, hi, opt, rb) { k, l, g, u, P_INT,  &g_cfg.f, lo, hi, opt, rb }
@@ -59,6 +61,7 @@ static const cfg_param_t PARAM_TABLE[] = {
     P_S("tz",         "Time zone (POSIX)",      "Device",  tz, sizeof g_cfg.tz - 1, false),
     P_B("log_serial", "Serial console log",     "Debug", log_serial, false),
     P_I("log_remote", "Remote log level",       "Debug", "",  log_remote, 0, 3, "0,1,2,3",                           false),
+    P_S("ota_repo",   "Firmware repository",    "Update", ota_repo, sizeof g_cfg.ota_repo - 1, false),
 };
 #define N_PARAMS (sizeof PARAM_TABLE / sizeof PARAM_TABLE[0])
 
@@ -129,6 +132,7 @@ esp_err_t config_init(void)
     char stored[16] = {0}; size_t len = sizeof stored;
     if (nvs_get_str(h, KEY_FWVER, stored, &len) != ESP_OK || strcmp(stored, FW_VERSION_STR) != 0) {
         ESP_LOGI(TAG, "fw_version: '%s' -> '%s'", stored, FW_VERSION_STR);
+        snprintf(s_prev_fw, sizeof s_prev_fw, "%s", stored);
         nvs_set_str(h, KEY_FWVER, FW_VERSION_STR);
     }
 
@@ -147,6 +151,7 @@ esp_err_t config_init(void)
 }
 
 const char *config_fw_version(void) { return FW_VERSION_STR; }
+const char *config_prev_fw_version(void) { return s_prev_fw; }
 
 /* ------------------------------------------------------------------ */
 int config_param_count(void) { return N_PARAMS; }

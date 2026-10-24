@@ -8,6 +8,8 @@
 #include "selftest.h"
 #include "upload.h"
 #include "power.h"
+#include "ota.h"
+#include "esp_ota_ops.h"
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -204,6 +206,12 @@ static esp_err_t h_status(httpd_req_t *r)
           cJSON_AddNumberToObject(up, "retries", us.retries);
           cJSON_AddStringToObject(up, "last_error", us.last_error);
       } }
+    { ota_status_t os; ota_get_status(&os);
+      cJSON *o = cJSON_AddObjectToObject(j, "ota");
+      static const char *ph[] = { "idle", "checking", "downloading", "verifying", "rebooting", "error" };
+      cJSON_AddStringToObject(o, "phase", ph[os.phase <= OTA_ERROR ? os.phase : 0]);
+      if (os.phase == OTA_DOWNLOADING) { cJSON_AddNumberToObject(o, "received_bytes", os.received_bytes); cJSON_AddNumberToObject(o, "total_bytes", os.asset_bytes); }
+      if (os.phase == OTA_ERROR) cJSON_AddStringToObject(o, "error", os.error); }
     cJSON_AddNumberToObject(rc, "count", st.store.count);
     cJSON_AddNumberToObject(rc, "total_mb", st.store.total_mb);
     cJSON_AddNumberToObject(rc, "free_mb", st.store.free_mb);
@@ -363,6 +371,7 @@ static esp_err_t h_reboot(httpd_req_t *r)
 {
     cors(r);
     httpd_resp_sendstr(r, "{\"ok\":true}");
+    ota_mark_valid();                             /* a requested restart is not a reason to roll back a fresh image */
     vTaskDelay(pdMS_TO_TICKS(200));
     esp_restart();
     return ESP_OK;
@@ -380,6 +389,57 @@ static esp_err_t h_power_off(httpd_req_t *r)
     httpd_resp_sendstr(r, out);
     app_request_power_off("ui");
     return ESP_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* /api/v1/ota — firmware update from GitHub Releases (ota.h)           */
+/* ------------------------------------------------------------------ */
+static cJSON *ota_json(void)
+{
+    ota_status_t os; ota_get_status(&os);
+    cJSON *j = cJSON_CreateObject();
+    static const char *ph[] = { "idle", "checking", "downloading", "verifying", "rebooting", "error" };
+    cJSON_AddStringToObject(j, "phase", ph[os.phase <= OTA_ERROR ? os.phase : 0]);
+    cJSON_AddStringToObject(j, "running", config_fw_version());
+    { const esp_partition_t *p = esp_ota_get_running_partition(); cJSON_AddStringToObject(j, "slot", p ? p->label : "?"); }
+    cJSON_AddBoolToObject(j, "pending_verify", ota_pending_verify());
+    cJSON_AddStringToObject(j, "repo", g_cfg.ota_repo);
+    { char hint[16]; ota_pat_hint(hint); cJSON_AddBoolToObject(j, "token_set", ota_pat_is_set()); cJSON_AddStringToObject(j, "token_hint", hint); }
+    cJSON_AddBoolToObject(j, "checked", os.checked);
+    if (os.checked) {
+        cJSON_AddStringToObject(j, "latest", os.latest_tag);
+        cJSON_AddStringToObject(j, "asset", os.asset_name);
+        cJSON_AddNumberToObject(j, "asset_bytes", os.asset_bytes);
+        cJSON_AddStringToObject(j, "published", os.published);
+        cJSON_AddBoolToObject(j, "update_available", os.update_available);
+    }
+    if (os.phase == OTA_DOWNLOADING) { cJSON_AddNumberToObject(j, "received_bytes", os.received_bytes); cJSON_AddNumberToObject(j, "total_bytes", os.asset_bytes); }
+    if (os.phase == OTA_ERROR) cJSON_AddStringToObject(j, "error", os.error);
+    return j;
+}
+static esp_err_t h_ota_get(httpd_req_t *r) { return send_json(r, ota_json(), NULL); }
+static esp_err_t ota_kick(httpd_req_t *r, esp_err_t e)
+{
+    if (e == ESP_ERR_INVALID_STATE) return send_err(r, "409 Conflict", store_is_recording() ? "recording in progress" : upload_active() ? "upload in progress" : "update already running");
+    if (e == ESP_ERR_NOT_FOUND) return send_err(r, "409 Conflict", "check for updates first");
+    if (e != ESP_OK) return send_err(r, "500 Internal Server Error", esp_err_to_name(e));
+    vTaskDelay(pdMS_TO_TICKS(50));
+    return send_json(r, ota_json(), NULL);
+}
+static esp_err_t h_ota_check(httpd_req_t *r)   { return ota_kick(r, ota_check()); }
+static esp_err_t h_ota_install(httpd_req_t *r) { return ota_kick(r, ota_install()); }
+/* POST {"token":"ghp_…"} ("" clears). The token is never returned. */
+static esp_err_t h_ota_token(httpd_req_t *r)
+{
+    if (config_is_locked()) return send_err(r, "409 Conflict", "recording in progress: settings are locked");
+    cJSON *b = read_body(r);
+    cJSON *t = b ? cJSON_GetObjectItem(b, "token") : NULL;
+    if (!cJSON_IsString(t)) { cJSON_Delete(b); return send_err(r, "400 Bad Request", "{\"token\":\"…\"} expected"); }
+    esp_err_t e = ota_pat_set(t->valuestring);
+    cJSON_Delete(b);
+    if (e == ESP_ERR_INVALID_ARG) return send_err(r, "400 Bad Request", "token: letters, digits and _ only, max 120");
+    if (e != ESP_OK) return send_err(r, "500 Internal Server Error", esp_err_to_name(e));
+    return send_json(r, ota_json(), NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -604,6 +664,10 @@ esp_err_t webui_start(webui_status_fn fn)
         { .uri = "/api/v1/wifi/*",    .method = HTTP_DELETE,  .handler = h_wifi_delete },
         { .uri = "/api/v1/reboot",    .method = HTTP_POST,    .handler = h_reboot },
         { .uri = "/api/v1/power/off", .method = HTTP_POST,    .handler = h_power_off },
+        { .uri = "/api/v1/ota",         .method = HTTP_GET,   .handler = h_ota_get },
+        { .uri = "/api/v1/ota/check",   .method = HTTP_POST,  .handler = h_ota_check },
+        { .uri = "/api/v1/ota/install", .method = HTTP_POST,  .handler = h_ota_install },
+        { .uri = "/api/v1/ota/token",   .method = HTTP_POST,  .handler = h_ota_token },
         { .uri = "/api/v1/selftest",  .method = HTTP_GET,     .handler = h_selftest },
         { .uri = "/api/v1/time",      .method = HTTP_POST,    .handler = h_time_post },
         { .uri = "/api/v1/recordings",        .method = HTTP_GET,    .handler = h_rec_list },

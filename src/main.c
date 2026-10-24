@@ -31,6 +31,7 @@
 #include "sampler.h"
 #include "store.h"
 #include "upload.h"
+#include "ota.h"
 #include "rlog.h"
 #include "selftest.h"
 #include "webui.h"
@@ -176,6 +177,7 @@ static void power_off_now(const char *why)
     ESP_LOGW(TAG, "switching OFF (%s)", why);
     if (store_is_recording()) store_stop("power_off", NULL);   /* trailer on the NAND before anything else */
     cloud_shutdown(why);                          /* tell the backend it is intentional (≤ 1.2 s), before anything else */
+    ota_mark_valid();                             /* a deliberate power-off is not a reason to roll back a fresh image */
     led_set(LED_OFF);
     config_user_off_set(true);                    /* allowed: no capture session is running at this point */
     bq25180_status_t bq; power_charger_status(&bq);
@@ -270,6 +272,7 @@ void app_main(void)
     { cloud_status_t cs; cloud_get_status(&cs); store_init(cloud_device_id(), cs.boot_id, nand_ok); }
     store_set_event_hook(on_store_event);
     upload_init(cloud_upload_done);               /* resumable HTTPS upload task (core 0), driven by the `upload` command */
+    ota_init();                                   /* GitHub Releases updater; this image may still be PENDING_VERIFY */
 
     if (g_cfg.selftest_boot) {
         selftest_run(ST_QUICK | (g_cfg.selftest_full ? ST_NAND_STRESS : 0), g_cfg.selftest_full ? 30 : 0);
@@ -305,6 +308,17 @@ void app_main(void)
         { power_btn_t k = power_poll_button(); if (k) s_btn_event = k; }
         if (s_btn_event == BTN_LONG) power_off_now("button");       /* closes a running session first */
         if (s_off_request) power_off_now(s_off_request);            /* UI "Power off" */
+
+        /* First boot after an OTA: confirm the image once the cloud is up (or after 90 s without it), never mid-session.
+         * Until then a crash/reset rolls back to the previous slot (bootloader rollback). */
+        if (ota_pending_verify() && !store_is_recording()) {
+            cloud_status_t cs; cloud_get_status(&cs);
+            if (cs.state == CLOUD_ONLINE || tick > 900) {
+                ota_mark_valid();
+                char d[80]; snprintf(d, sizeof d, "{\"from\":\"%s\",\"to\":\"%s\"}", config_prev_fw_version(), config_fw_version());
+                cloud_event("fw_updated", d);
+            }
+        }
         if (s_btn_event == BTN_SHORT) toggle_recording("button");
         s_btn_event = 0;
 
