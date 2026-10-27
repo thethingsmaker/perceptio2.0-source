@@ -6,19 +6,23 @@
 #include "esp_timer.h"
 #include "task_psram.h"
 
-typedef struct { uint8_t r, g, b; float period_s; float floor; } pattern_t;
+enum { BREATHE = 0, BLINK, SOLID };
+typedef struct { uint8_t r, g, b; uint8_t kind; float period_s; float floor; } pattern_t;
 
-/* floor = minimum of the breath (fraction of peak) so the LED never goes fully dark */
+/* floor = minimum of the breath (fraction of peak) so a breathing LED never goes fully dark.
+ * Yellow = red + green; the mix depends on the LED's efficiencies — tune here if it looks orange or lime. */
+#define YEL 255, 150, 0
 static const pattern_t PAT[] = {
-    [LED_OFF]           = { 0,   0,   0,   1.0f, 0.00f },
-    [LED_BOOT]          = { 0,   0,   255, 1.0f, 0.10f },
-    [LED_OK]            = { 0,   255, 0,   3.0f, 0.06f },
-    [LED_FAULT]         = { 255, 0,   0,   1.0f, 0.15f },
-    [LED_CHARGING]      = { 255, 70,  0,   2.5f, 0.05f },
-    [LED_FULL]          = { 0,   90,  0,   6.0f, 0.30f },
-    [LED_CHARGE_PAUSED] = { 255, 0,   0,   1.5f, 0.10f },
-    [LED_RECORDING]     = { 0,   200, 255, 2.0f, 0.08f },
-    [LED_IDENTIFY]      = { 255, 255, 255, 0.6f, 0.05f },
+    [LED_OFF]          = { 0,   0,   0,   SOLID,   1.0f,  0.00f },
+    [LED_BOOT]         = { 0,   0,   255, BREATHE, 1.0f,  0.10f },
+    [LED_OK]           = { 0,   255, 0,   BREATHE, 3.0f,  0.06f },
+    [LED_BOOT_FAIL]    = { 255, 0,   0,   BLINK,   0.25f, 0.00f },
+    [LED_NET]          = { 0,   0,   255, BLINK,   0.25f, 0.00f },
+    [LED_RECORDING]    = { 255, 0,   0,   BREATHE, 2.0f,  0.08f },
+    [LED_CHARGING]     = { YEL,           BREATHE, 2.5f,  0.05f },
+    [LED_CHARGE_FAULT] = { YEL,           BLINK,   0.25f, 0.00f },
+    [LED_FULL]         = { YEL,           SOLID,   1.0f,  0.00f },
+    [LED_IDENTIFY]     = { 255, 255, 255, BLINK,   0.25f, 0.00f },
 };
 
 static volatile led_mode_t s_mode = LED_OFF;
@@ -36,9 +40,14 @@ static void task(void *arg)
         if (m != cur) { cur = m; t0 = esp_timer_get_time(); }      /* restart the breath on a change: immediate feedback */
         const pattern_t *p = &PAT[cur];
         float t = (esp_timer_get_time() - t0) / 1e6f;
-        float l = (1.0f - cosf(2.0f * (float)M_PI * t / p->period_s)) * 0.5f;   /* 0..1 raised cosine */
-        l = l * l;                                                               /* perceptual: longer near-dark, softer peak */
-        l = p->floor + (1.0f - p->floor) * l;
+        float l;
+        if (p->kind == SOLID) l = 1.0f;
+        else if (p->kind == BLINK) l = fmodf(t, p->period_s) < p->period_s * 0.5f ? 1.0f : 0.0f;   /* 50 % duty, starts on */
+        else {
+            l = (1.0f - cosf(2.0f * (float)M_PI * t / p->period_s)) * 0.5f;   /* 0..1 raised cosine */
+            l = l * l;                                                         /* perceptual: longer near-dark, softer peak */
+            l = p->floor + (1.0f - p->floor) * l;
+        }
         if (cur == LED_OFF) l = 0;
         lp5810_set_rgb((uint8_t)(p->r * l + 0.5f), (uint8_t)(p->g * l + 0.5f), (uint8_t)(p->b * l + 0.5f));
         vTaskDelay(pdMS_TO_TICKS(40));

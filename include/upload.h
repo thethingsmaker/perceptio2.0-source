@@ -26,7 +26,7 @@ typedef struct {
  * io_error, network). Called from the upload task. */
 typedef void (*upload_done_fn)(const char *cmd_id, bool ok, const char *reason, const char *result_json, const char *stats_json);
 
-esp_err_t upload_init(upload_done_fn done);
+esp_err_t upload_init(upload_done_fn done, const char *device_id);   /* device_id: for the User-Agent */
 /* ESP_ERR_INVALID_STATE: an upload is running or a recording is; ESP_ERR_NOT_FOUND: unknown rec_id. */
 esp_err_t upload_start(const char *cmd_id, const char *rec_id, const char *url, const char *token, uint32_t chunk_bytes);
 bool      upload_active(void);

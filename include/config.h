@@ -20,8 +20,8 @@
 
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 3
-#define FW_VERSION_PATCH 6
-#define FW_VERSION_STR   "0.3.6"
+#define FW_VERSION_PATCH 18
+#define FW_VERSION_STR   "0.3.18"
 
 /* ------------------------------------------------------------------ */
 /* WiFi list                                                           */
@@ -109,6 +109,7 @@ void config_set_change_hook(cfg_change_fn fn);
 const cfg_wifi_list_t *config_wifi_get(void);
 esp_err_t config_wifi_add(const char *ssid, const char *pass);
 esp_err_t config_wifi_remove(const char *ssid);
+esp_err_t config_wifi_prefer(const char *ssid);   /* move to the top of the list = tried first (call config_wifi_save) */
 void      config_wifi_clear(void);
 esp_err_t config_wifi_save(void);
 

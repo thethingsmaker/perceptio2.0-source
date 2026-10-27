@@ -52,6 +52,24 @@ Tabs: Dashboard · Live (60 fps plots) · Settings (generated from the schema) �
 Core affinity: `sdkconfig.defaults` pins main, WiFi, lwIP and esp_timer to core 0; `httpd` has `core_id = 0`;
 the sampler is `xTaskCreatePinnedToCore(..., 1)` and installs the GPIO ISR service from core 1.
 
+## LED (`src/led.c`, decided in `main.c` `led_update()`)
+
+One colour at a time, highest priority first; re-evaluated every second.
+
+| Priority | State | LED |
+|---|---|---|
+| 1 | identify (backend command) / recording refused | white fast blink |
+| 2 | self-test failed | red fast blink, 3 s after boot |
+| 3 | recording | red breathing |
+| 4 | charge fault: paused by temperature, safety timer, cable + cell but not charging for 10 s | yellow fast blink |
+| 5 | WiFi join failed, backend unreachable > 20 s, or fallback AP up | blue fast blink |
+| 6 | charge done (cable + cell) | yellow solid |
+| 7 | charging | yellow breathing |
+| 8 | WiFi + backend OK, idle | green breathing |
+
+While booting: blue breathing. Device off with the cable in (CHARGE-IDLE): yellow breathing / solid / fast blink as above.
+No battery connected: no charging states (the charger toggles; see `power_battery_present()`).
+
 ## Recording store (`src/store.c`) — PCR2 on the NAND
 
 - Files are **PCR2** (`docs/data-v2.md`), written directly on the W25N01KV, no filesystem: file header (JSON padded

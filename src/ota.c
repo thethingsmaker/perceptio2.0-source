@@ -9,7 +9,7 @@
 #include "config.h"
 #include "store.h"
 #include "upload.h"
-#include "cloud.h"
+#include "bus.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_http_client.h"
@@ -348,7 +348,7 @@ static void do_install(void)
     ESP_LOGW(TAG, "installed %s (%lu B in %lld s): rebooting", s_st.latest_tag, (unsigned long)s_st.received_bytes, (esp_timer_get_time() - t0) / 1000000);
     set_phase(OTA_REBOOTING, NULL);
     char d[96]; snprintf(d, sizeof d, "{\"from\":\"%s\",\"to\":\"%s\",\"bytes\":%lu}", FW_VERSION_STR, s_st.latest_tag, (unsigned long)s_st.received_bytes);
-    cloud_event("fw_update_installed", d);
+    bus_event("fw_update_installed", d);
     vTaskDelay(pdMS_TO_TICKS(2500));                  /* let the event and the UI answer go out */
     esp_restart();
 }

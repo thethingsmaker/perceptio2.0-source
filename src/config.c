@@ -225,6 +225,15 @@ esp_err_t config_wifi_add(const char *ssid, const char *pass)
     if (pass) strncpy(s_wifi.list[i].pass, pass, CFG_PASS_LEN);
     return ESP_OK;
 }
+esp_err_t config_wifi_prefer(const char *ssid)
+{
+    int i = find(ssid);
+    if (i < 0) return ESP_ERR_NOT_FOUND;
+    cfg_wifi_entry_t e = s_wifi.list[i];
+    for (; i > 0; i--) s_wifi.list[i] = s_wifi.list[i - 1];
+    s_wifi.list[0] = e;
+    return ESP_OK;
+}
 esp_err_t config_wifi_remove(const char *ssid)
 {
     int i = find(ssid);

@@ -25,6 +25,7 @@
 #include "led.h"
 #include "clock.h"
 #include "cloud.h"
+#include "bus.h"
 #include "imu.h"
 #include "w25n01kv.h"
 #include "net.h"
@@ -49,10 +50,11 @@ static void status_cb(webui_status_t *o)
     o->uptime_s  = esp_timer_get_time() / 1000000;
     o->heap_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     o->heap_min  = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
-    o->vbat      = power_vbat();
+    o->vbat      = power_vbat_avg();                 /* averaged + smoothed gauge (power.h); a raw reading jumps ±50 mV */
     o->vbat_cal  = power_vbat_calibrated();
-    o->soc_pct   = (bq.vin_pgood && bq.chg == BQ_CHG_DONE) ? 100            /* terminated = full, whatever the OCV table says */
-                 : power_soc_pct(o->vbat, bq.chg == BQ_CHG_CC || bq.chg == BQ_CHG_CV);
+    o->soc_pct   = !power_battery_present() ? -1                /* -1 = no battery (USB only) -> null in the API */
+                 : power_soc_display() >= 0 ? power_soc_display()
+                 : (bq.vin_pgood && bq.chg == BQ_CHG_DONE) ? 100 : power_soc_pct(o->vbat, bq.chg == BQ_CHG_CC || bq.chg == BQ_CHG_CV);
     o->bq_stat0  = bq.stat0; o->bq_stat1 = bq.stat1;
     o->rssi      = net_rssi();
     strncpy(o->ip, net_ip(), sizeof o->ip - 1);
@@ -80,7 +82,9 @@ static void cloud_info_cb(cloud_info_t *o)
     bq25180_status_t bq; power_charger_status(&bq);
     store_status_t ss; store_get_status(&ss);
     o->state       = ss.state == REC_IDLE ? "idle" : ss.state == REC_RECORDING ? "recording" : "stopping";
-    o->battery_pct = (bq.vin_pgood && bq.chg == BQ_CHG_DONE) ? 100 : power_soc_pct(power_vbat(), bq.chg == BQ_CHG_CC || bq.chg == BQ_CHG_CV);
+    o->battery_pct = !power_battery_present() ? -1              /* -1 -> null to the backend (protocol: unknown = null) */
+                   : power_soc_display() >= 0 ? power_soc_display()
+                   : (bq.vin_pgood && bq.chg == BQ_CHG_DONE) ? 100 : power_soc_pct(power_vbat(), bq.chg == BQ_CHG_CC || bq.chg == BQ_CHG_CV);
     o->charging    = bq.chg == BQ_CHG_CC || bq.chg == BQ_CHG_CV;
     o->plugged     = bq.vin_pgood;
     o->rssi        = net_rssi();
@@ -130,32 +134,82 @@ static bool charge_gate(float board_c)
     return paused;
 }
 
+#define DOUBLE_PRESS_US (1500 * 1000)            /* second press (its 0.3 s WAKE1) within 1.5 s of the first */
 #define AP_PASSWORD "perceptio"                   /* fallback AP (no known WiFi). Same on every unit: development only */
 static volatile power_btn_t s_btn_event;
 static void on_button(power_btn_t k) { s_btn_event = k; }
 static const char *volatile s_off_request;                 /* set by the UI/cloud; served by the main loop */
 void app_request_power_off(const char *why) { s_off_request = why ? why : "ui"; }
 
-static bool s_healthy;
-static void led_idle(void) { led_set(s_healthy ? LED_OK : LED_FAULT); }
+/* ---- status LED: one place decides (priority order in led.h); called every second ---- */
+static int64_t  s_boot_fail_until;               /* esp_timer time until which a failed self-test is shown */
+static bool     s_chg_paused;                    /* charge_gate(): paused by the temperature window */
+static uint32_t s_backend_bad_s;                 /* backend_watch(): seconds the backend has been unreachable */
+static void led_update(const bq25180_status_t *bq)
+{
+    if (led_get() == LED_IDENTIFY) return;       /* "find me" / refused-start flash runs its own timer */
+    static uint32_t notchg_s;
+    bool bat = power_battery_present(), plugged = bq->vin_pgood;
+    bool charging = bq->chg == BQ_CHG_CC || bq->chg == BQ_CHG_CV, done = bq->chg == BQ_CHG_DONE;
+    notchg_s = (plugged && bat && !charging && !done) ? notchg_s + 1 : 0;     /* cable + cell but no charging */
+    bool chg_fault = plugged && bat && (s_chg_paused || bq->safety_fault || notchg_s >= 10);
+    bool net_bad = net_ap_active() || s_backend_bad_s >= 20;                  /* 20 s grace for a normal (re)connect */
+    led_mode_t m;
+    if (esp_timer_get_time() < s_boot_fail_until) m = LED_BOOT_FAIL;
+    else if (store_is_recording())                m = LED_RECORDING;
+    else if (chg_fault)                           m = LED_CHARGE_FAULT;
+    else if (net_bad)                             m = LED_NET;
+    else if (plugged && bat && done)              m = LED_FULL;
+    else if (plugged && bat && charging)          m = LED_CHARGING;
+    else                                          m = LED_OK;
+    if (m != led_get()) led_set(m);
+}
 
 /* recording started / stopped (from whichever side did it: UI, cloud, button, timeout) */
 static void on_store_event(bool started, const store_rec_t *r, const char *by)
 {
     char d[160];
     if (started) {
-        led_set(LED_RECORDING);
-        cloud_set_state("recording");
+        led_set(LED_RECORDING);                   /* immediate feedback; led_update() keeps it */
+        bus_state("recording");
         snprintf(d, sizeof d, "{\"rec_id\":\"%s\",\"by\":\"%s\",\"rec_tag\":\"%s\"}", r->rec_id, by, r->rec_tag);
-        cloud_event("rec_started", d);
+        bus_event("rec_started", d);
     } else {
-        led_idle();
-        cloud_set_state("idle");
+        bus_state("idle");                        /* LED: led_update() picks the next state within 1 s */
         snprintf(d, sizeof d, "{\"rec_id\":\"%s\",\"by\":\"%s\",\"samples\":%" PRIu32 ",\"bytes\":%" PRIu32 ",\"duration_ms\":%" PRIu32 ",\"dropped\":%" PRIu32 ",\"complete\":%s}",
                  r->rec_id, by, r->samples, r->bytes, r->duration_ms, r->dropped, r->complete ? "true" : "false");
-        cloud_event("rec_stopped", d);
+        bus_event("rec_stopped", d);
     }
-    cloud_inventory_changed();                        /* retained hello: current_rec / recordings[] are part of it */
+    bus_inventory_changed();                        /* retained hello: current_rec / recordings[] are part of it */
+}
+
+/* Fallback AP "Perceptio-<device id>": the UI must always be reachable. Started when no saved network joins at boot,
+ * and by backend_watch() whenever the backend has been unreachable for AP_AFTER_S (joined a network without internet,
+ * DNS dead, router gone...). Switched off again once the backend has been reachable for 30 s and nobody uses the AP. */
+#define AP_AFTER_S   90
+static esp_err_t start_fallback_ap(const char *why)
+{
+    if (net_ap_active()) return ESP_OK;
+    char ssid[33]; snprintf(ssid, sizeof ssid, "Perceptio-%s", cloud_device_id());
+    ESP_LOGW(TAG, "fallback AP: %s", why);
+    esp_err_t e = net_start_ap(ssid, AP_PASSWORD);
+    if (e == ESP_OK) { net_set_power_save(false); webui_start(status_cb); }   /* webui_start is a no-op when running */
+    return e;
+}
+static void backend_watch(void)                    /* 1 s tick */
+{
+    static uint32_t bad_s, good_s;
+    cloud_status_t cs; cloud_get_status(&cs);
+    /* "reachable" = the broker answered: online, or waiting for enrolment approval / rejected (still a live link) */
+    bool ok = cs.state == CLOUD_ONLINE || cs.state == CLOUD_ENROL_WAIT || cs.state == CLOUD_ENROL_REJECTED
+              || (cs.state == CLOUD_OFF && net_is_connected());          /* no cloud configured: WiFi is all we can check */
+    if (ok) { bad_s = 0; good_s++; } else { good_s = 0; bad_s++; }
+    s_backend_bad_s = bad_s;
+    if (!net_ap_active() && bad_s == AP_AFTER_S) {
+        char why[64]; snprintf(why, sizeof why, "backend unreachable for %d s (%s)", AP_AFTER_S, net_is_connected() ? "WiFi up, no internet?" : "no WiFi");
+        start_fallback_ap(why);
+    }
+    if (net_ap_active() && good_s >= 30 && good_s % 30 == 0) net_stop_ap();    /* retried every 30 s while a phone is on it */
 }
 
 static void toggle_recording(const char *by)
@@ -219,7 +273,7 @@ static void charge_idle_loop(void)
             esp_restart();
         }
 
-        led_set(paused ? LED_CHARGE_PAUSED : bq.chg == BQ_CHG_DONE ? LED_FULL : LED_CHARGING);
+        led_set(paused ? LED_CHARGE_FAULT : bq.chg == BQ_CHG_DONE ? LED_FULL : LED_CHARGING);
 
         if (++tick % 50 == 0)                     /* every 2 s */
             ESP_LOGI(TAG, "CHARGE-IDLE  VBAT %.2f V  %-18s ILIM %d THERM %d  board %.1f C  STAT1 %02X /INT edges %" PRIu32 "%s",
@@ -269,10 +323,11 @@ void app_main(void)
     net_init();
     ESP_LOGI(TAG, "heap after wifi init: %u KB internal", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
     cloud_init(cloud_info_cb);                    /* identity, boot_id++, buffered boot event; connects when the link is up */
-    net_set_link_hook(cloud_link);
+    net_add_link_hook(clock_link);                /* NTP on every got-IP (first, as before) */
+    net_add_link_hook(cloud_link);                /* MQTT client start/stop */
     { cloud_status_t cs; cloud_get_status(&cs); store_init(cloud_device_id(), cs.boot_id, nand_ok); }
     store_set_event_hook(on_store_event);
-    upload_init(cloud_upload_done);               /* resumable HTTPS upload task (core 0), driven by the `upload` command */
+    upload_init(cloud_upload_done, cloud_device_id());               /* resumable HTTPS upload task (core 0), driven by the `upload` command */
     ota_init();                                   /* GitHub Releases updater; this image may still be PENDING_VERIFY */
 
     if (g_cfg.selftest_boot) {
@@ -296,19 +351,19 @@ void app_main(void)
     } else {
         /* No known network: own access point "Perceptio-<device id>", same UI at http://192.168.4.1/. The saved
          * networks keep being retried in the background (net.c); joining one switches the AP off. */
-        char ssid[33]; snprintf(ssid, sizeof ssid, "Perceptio-%s", cloud_device_id());
-        if (net_start_ap(ssid, AP_PASSWORD) == ESP_OK) {
+        if (start_fallback_ap("no saved network reachable at boot") == ESP_OK) {
             net_set_power_save(false);
             net_start_mdns(g_cfg.dev_name, config_fw_version());
             webui_start(status_cb);
-            ESP_LOGW(TAG, ">>> no WiFi: join '%s' (password '%s') and open http://%s/ <<<", ssid, AP_PASSWORD, net_ip());
+            ESP_LOGW(TAG, ">>> no WiFi: join 'Perceptio-%s' (password '%s') and open http://%s/ <<<", cloud_device_id(), AP_PASSWORD, net_ip());
         } else {
             ESP_LOGE(TAG, "no WiFi and the fallback AP failed — UI not reachable");
         }
     }
 
     bool healthy = imu_ok && nand_ok && selftest_passed() == selftest_count();
-    s_healthy = healthy; led_idle();
+    if (!healthy) { s_boot_fail_until = esp_timer_get_time() + 3000000; led_set(LED_BOOT_FAIL); }   /* red blink 3 s */
+    else led_set(LED_OK);
     ESP_LOGI(TAG, "boot complete: imu %s, nand %s, wifi %s, selftest %d/%d", imu_ok ? "ok" : "FAIL", nand_ok ? "ok" : "FAIL",
              online ? net_ssid() : "offline", selftest_passed(), selftest_count());
 
@@ -317,7 +372,22 @@ void app_main(void)
     s_btn_event = 0;
     for (;;) {
         { power_btn_t k = power_poll_button(); if (k) s_btn_event = k; }
-        if (s_btn_event == BTN_LONG) power_off_now("button");       /* closes a running session first */
+        /* Button = two gestures only (the BQ25180 reports a press after 0.3 s of hold = WAKE1, and 3 s = WAKE2; there is
+         * no release event):  hold 3 s -> power off;  two presses within 1.5 s -> start/stop recording. A single press
+         * does nothing — a long press always begins with a WAKE1, which used to start a recording on the way to off. */
+        {
+            static int64_t first_us;                              /* WAKE1 of a possible double press (0 = none) */
+            int64_t now = esp_timer_get_time();
+            if (s_btn_event == BTN_LONG) { first_us = 0; power_off_now("button"); }   /* closes a running session first */
+            else if (s_btn_event == BTN_SHORT) {
+                if (first_us && now - first_us <= DOUBLE_PRESS_US) {
+                    first_us = 0;
+                    ESP_LOGI(TAG, "button: double press");
+                    toggle_recording("button");
+                } else first_us = now;
+            }
+            if (first_us && now - first_us > DOUBLE_PRESS_US) { first_us = 0; ESP_LOGI(TAG, "button: single press (ignored)"); }
+        }
         if (s_off_request) power_off_now(s_off_request);            /* UI "Power off" */
 
         /* First boot after an OTA: confirm the image once the cloud is up (or after 90 s without it), never mid-session.
@@ -327,10 +397,9 @@ void app_main(void)
             if (cs.state == CLOUD_ONLINE || tick > 900) {
                 ota_mark_valid();
                 char d[80]; snprintf(d, sizeof d, "{\"from\":\"%s\",\"to\":\"%s\"}", config_prev_fw_version(), config_fw_version());
-                cloud_event("fw_updated", d);
+                bus_event("fw_updated", d);
             }
         }
-        if (s_btn_event == BTN_SHORT) toggle_recording("button");
         s_btn_event = 0;
 
         /* session guards: max length (parameter) and storage exhausted by the writer */
@@ -340,13 +409,19 @@ void app_main(void)
             else if (ss.elapsed_ms >= (uint32_t)g_cfg.session_max_min * 60000u) store_stop("timeout", NULL);
         }
 
+        if (tick % 10 == 0) backend_watch();          /* fallback AP when the backend stays unreachable */
+        if (tick % 10 == 0) {                         /* battery gauge: 1 s ticks */
+            bq25180_status_t b1; power_charger_status(&b1);
+            power_battery_tick(b1.vin_pgood, b1.chg == BQ_CHG_CC || b1.chg == BQ_CHG_CV, b1.chg == BQ_CHG_DONE);
+            led_update(&b1);
+        }
         if (tick % 100 == 0) {                        /* status line every 10 s (it is also shipped to the backend log) */
             bq25180_status_t bq; power_charger_status(&bq);
             sampler_stats_t st; sampler_get_stats(&st);
             float board_c = 25.0f + st.last.v[0] / 256.0f;
-            charge_gate(board_c);
-            ESP_LOGI(TAG, "VBAT %.2f V  VIN %d  %-18s ILIM %d VINDPM %d VDPPM %d THERM %d%s  board %.1f C | IMU %" PRIu32 " Hz, peak %.1f g | heap %u KB",
-                     power_vbat(), bq.vin_pgood, bq25180_chg_name(bq.chg), bq.ilim_active, bq.vindpm_active, bq.vdppm_active, bq.thermreg_active,
+            s_chg_paused = charge_gate(board_c);
+            ESP_LOGI(TAG, "VBAT %.2f V (avg %.3f, %d %%)  VIN %d  %-18s ILIM %d VINDPM %d VDPPM %d THERM %d%s  board %.1f C | IMU %" PRIu32 " Hz, peak %.1f g | heap %u KB",
+                     power_vbat(), power_vbat_avg(), power_soc_display(), bq.vin_pgood, bq25180_chg_name(bq.chg), bq.ilim_active, bq.vindpm_active, bq.vdppm_active, bq.thermreg_active,
                      bq.safety_fault ? " SAFETY-TMR" : "", board_c,
                      st.rate_hz, st.hg_peak_g, (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
         }

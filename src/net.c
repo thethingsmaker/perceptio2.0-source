@@ -3,10 +3,11 @@
 #include <stdio.h>
 #include "net.h"
 #include "config.h"
-#include "clock.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "lwip/netdb.h"
+#include "freertos/semphr.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_event.h"
@@ -16,8 +17,14 @@ static const char *TAG = "NET";
 static EventGroupHandle_t s_ev;
 static volatile bool s_keepalive, s_connected;
 static char s_ip[16] = "-", s_ssid[33] = "";
-static net_link_fn s_link_hook;
+#define LINK_HOOKS_MAX 4
+static net_link_fn s_link_hooks[LINK_HOOKS_MAX];
+static int s_n_link_hooks;
+static void link_notify(bool up) { for (int i = 0; i < s_n_link_hooks; i++) s_link_hooks[i](up); }
 static volatile bool s_ap_on;
+static volatile bool s_testing;                   /* credential test running: no auto-reconnect, no link hook */
+static volatile int  s_last_reason;
+static SemaphoreHandle_t s_radio;                 /* one station join at a time: boot join, AP retry, test */
 #define AP_IP "192.168.4.1"                       /* esp_netif default for the AP interface */
 #define EV_CONNECTED BIT0
 #define EV_FAILED    BIT1
@@ -28,16 +35,41 @@ static void evt(void *arg, esp_event_base_t base, int32_t id, void *data)
         wifi_event_sta_disconnected_t *d = data;
         bool was = s_connected;
         s_connected = false;
+        s_last_reason = d->reason;
         ESP_LOGW(TAG, "disconnected (reason %d)", d->reason);
-        if (was && s_link_hook) s_link_hook(false);
+        if (was && !s_testing) link_notify(false);
         xEventGroupSetBits(s_ev, EV_FAILED);
-        if (s_keepalive) { vTaskDelay(pdMS_TO_TICKS(1000)); esp_wifi_connect(); }
+        /* with the fallback AP up, the AP retry task reconnects (every 60 s, only while no phone is on the AP):
+         * a station reconnect loop hops channels and would keep knocking the phone off the AP */
+        if (s_keepalive && !s_testing && !s_ap_on) { vTaskDelay(pdMS_TO_TICKS(1000)); esp_wifi_connect(); }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
         snprintf(s_ip, sizeof s_ip, IPSTR, IP2STR(&e->ip_info.ip));
         s_connected = true;
-        clock_network_up();                          /* NTP as soon as we have an address (also on reconnect) */
-        if (s_link_hook) s_link_hook(true);
+        /* DNS: log what DHCP gave us, and keep public resolvers behind it. lwIP asks the servers in order and moves on
+         * when one does not answer, so a router whose own DNS is dead (or a DHCP lease without a DNS option) no longer
+         * leaves the board unable to resolve the backend ("getaddrinfo() returns 202"). */
+        {
+            esp_netif_dns_info_t m = { 0 }, b = { 0 }, f = { 0 };
+            esp_netif_get_dns_info(e->esp_netif, ESP_NETIF_DNS_MAIN, &m);
+            esp_netif_get_dns_info(e->esp_netif, ESP_NETIF_DNS_BACKUP, &b);
+            if (b.ip.u_addr.ip4.addr == 0) {
+                b.ip.type = ESP_IPADDR_TYPE_V4; b.ip.u_addr.ip4.addr = ESP_IP4TOADDR(1, 1, 1, 1);
+                esp_netif_set_dns_info(e->esp_netif, ESP_NETIF_DNS_BACKUP, &b);
+            }
+            f.ip.type = ESP_IPADDR_TYPE_V4; f.ip.u_addr.ip4.addr = ESP_IP4TOADDR(8, 8, 8, 8);
+            esp_netif_set_dns_info(e->esp_netif, ESP_NETIF_DNS_FALLBACK, &f);
+            if (m.ip.u_addr.ip4.addr == 0) {                    /* no DNS in the lease at all */
+                m.ip.type = ESP_IPADDR_TYPE_V4; m.ip.u_addr.ip4.addr = ESP_IP4TOADDR(1, 1, 1, 1);
+                esp_netif_set_dns_info(e->esp_netif, ESP_NETIF_DNS_MAIN, &m);
+                ESP_LOGW(TAG, "DHCP gave no DNS server: using 1.1.1.1");
+            }
+            wifi_config_t wc; char ss[33] = "?";
+            if (esp_wifi_get_config(WIFI_IF_STA, &wc) == ESP_OK) { memcpy(ss, wc.sta.ssid, 32); ss[32] = 0; }
+            ESP_LOGI(TAG, "'%s': ip %s gw " IPSTR " dns " IPSTR " / " IPSTR " / 8.8.8.8", ss, s_ip, IP2STR(&e->ip_info.gw),
+                     IP2STR(&m.ip.u_addr.ip4), IP2STR(&b.ip.u_addr.ip4));
+        }
+        if (!s_testing) link_notify(true);          /* subscribers: clock (NTP), cloud (MQTT) — see main */
         xEventGroupSetBits(s_ev, EV_CONNECTED);
     }
 }
@@ -50,6 +82,7 @@ esp_err_t net_init(void)
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     s_ev = xEventGroupCreate();
+    s_radio = xSemaphoreCreateMutex();
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, evt, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, evt, NULL));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
@@ -71,8 +104,10 @@ int net_scan(void)
 
 int net_scan_list(net_ap_t *out, int max)
 {
+    if (xSemaphoreTake(s_radio, 0) != pdTRUE) return -ESP_ERR_INVALID_STATE;
     wifi_scan_config_t sc = { .show_hidden = false };
     esp_err_t e = esp_wifi_scan_start(&sc, true);
+    xSemaphoreGive(s_radio);
     if (e != ESP_OK) return -e;
     uint16_t n = 0; esp_wifi_scan_get_ap_num(&n);
     if (n > 32) n = 32;
@@ -95,7 +130,16 @@ int net_scan_list(net_ap_t *out, int max)
     return k;
 }
 
+static esp_err_t connect_from_list_locked(uint32_t timeout_ms);
 esp_err_t net_connect_from_list(uint32_t timeout_ms)
+{
+    if (xSemaphoreTake(s_radio, pdMS_TO_TICKS(30000)) != pdTRUE) return ESP_ERR_TIMEOUT;
+    esp_err_t e = connect_from_list_locked(timeout_ms);
+    xSemaphoreGive(s_radio);
+    return e;
+}
+
+static esp_err_t connect_from_list_locked(uint32_t timeout_ms)
 {
     const cfg_wifi_list_t *wl = config_wifi_get();
     for (int attempt = 0; attempt < 2; attempt++)       /* two rounds: auth failures are often transient */
@@ -142,20 +186,28 @@ static int ap_clients(void)
  * and would drop a connected phone). */
 static void ap_retry_task(void *arg)
 {
-    for (;;) {
+    /* Lives as long as the AP. Switching the AP off is decided by main (backend reachable again: net_stop_ap). */
+    while (s_ap_on) {
         vTaskDelay(pdMS_TO_TICKS(60000));
-        if (s_connected) break;
+        if (!s_ap_on) break;
+        if (s_connected || s_testing) continue;
         if (ap_clients() > 0) continue;
         if (config_wifi_get()->count == 0) continue;
         ESP_LOGI(TAG, "AP: retrying saved networks");
-        if (net_connect_from_list(8000) == ESP_OK) break;
-    }
-    if (s_connected) {
-        esp_wifi_set_mode(WIFI_MODE_STA);             /* keeps the station association; AP off */
-        s_ap_on = false;
-        ESP_LOGW(TAG, "joined '%s' (%s): fallback AP off", s_ssid, s_ip);
+        net_connect_from_list(8000);
     }
     vTaskDelete(NULL);
+}
+
+esp_err_t net_stop_ap(void)
+{
+    if (!s_ap_on) return ESP_OK;
+    if (ap_clients() > 0) return ESP_ERR_INVALID_STATE;     /* someone is using it: keep it */
+    esp_err_t e = esp_wifi_set_mode(WIFI_MODE_STA);         /* keeps the station association */
+    if (e != ESP_OK) return e;
+    s_ap_on = false;
+    ESP_LOGW(TAG, "fallback AP off (on '%s', %s)", s_ssid, s_ip);
+    return ESP_OK;
 }
 
 esp_err_t net_start_ap(const char *ssid, const char *pass)
@@ -173,18 +225,157 @@ esp_err_t net_start_ap(const char *ssid, const char *pass)
     ac.ap.channel = 1;
     ac.ap.max_connection = 4;
     ac.ap.pmf_cfg.required = false;
-    esp_wifi_stop();
+    /* no esp_wifi_stop(): the AP may come up next to a working station link (joined, but no internet) */
     esp_err_t e = esp_wifi_set_mode(WIFI_MODE_APSTA);
     if (e == ESP_OK) e = esp_wifi_set_config(WIFI_IF_AP, &ac);
-    if (e == ESP_OK) e = esp_wifi_start();
+    if (e == ESP_OK) e = esp_wifi_start();            /* no-op when the radio already runs */
     if (e != ESP_OK) { ESP_LOGE(TAG, "AP start: %s", esp_err_to_name(e)); return e; }
     s_ap_on = true;
-    ESP_LOGW(TAG, "fallback AP '%s' up — UI at http://" AP_IP "/", ssid);
+    ESP_LOGW(TAG, "fallback AP '%s' up — UI at http://" AP_IP "/%s%s%s", ssid, s_connected ? " (station still on '" : "", s_connected ? s_ssid : "", s_connected ? "')" : "");
     xTaskCreatePinnedToCore(ap_retry_task, "ap_retry", 3072, NULL, 3, NULL, 0);
     return ESP_OK;
 }
 
 bool net_ap_active(void) { return s_ap_on; }
+
+/* ------------------------------------------------------------------ */
+/* Credential test                                                      */
+/* ------------------------------------------------------------------ */
+#define TEST_HOST "mqtt.padelsense.net"              /* name of the backend broker (cloud.c BROKER_URI) */
+static net_test_t s_test;
+static char s_test_pass[65];
+
+static const char *reason_text(int r)
+{
+    switch (r) {
+    case WIFI_REASON_AUTH_FAIL: case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT: case WIFI_REASON_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_AUTH_EXPIRE: case WIFI_REASON_MIC_FAILURE:
+        return "wrong password";
+    case WIFI_REASON_NO_AP_FOUND:
+        return "network not found (out of range or 5 GHz only)";
+    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY: case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+        return "security mode not supported (WPA3-only?) or password not needed";
+    case WIFI_REASON_ASSOC_FAIL: case WIFI_REASON_CONNECTION_FAIL:
+        return "the router refused the connection";
+    case 0: return "no answer from the network";
+    default: return "connection failed";
+    }
+}
+
+static void test_task(void *arg)
+{
+    net_test_t *t = &s_test;
+    if (xSemaphoreTake(s_radio, pdMS_TO_TICKS(30000)) != pdTRUE) {
+        snprintf(t->error, sizeof t->error, "WiFi busy, try again"); t->state = NT_FAIL; vTaskDelete(NULL);
+    }
+    /* In fallback-AP mode the current station link (if any) is the broken one: a working new network is kept, not
+     * swapped back. Otherwise the test returns to where it was. */
+    bool connected_now = s_connected;
+    bool was = connected_now && !s_ap_on;
+    wifi_config_t prev = { 0 };
+    esp_wifi_get_config(WIFI_IF_STA, &prev);
+    char prev_ssid[33]; strlcpy(prev_ssid, s_ssid, sizeof prev_ssid);
+    ESP_LOGW(TAG, "%s '%s'%s%s", t->stay ? "connect" : "test", t->ssid, was ? ": leaving " : "", was ? prev_ssid : "");
+
+    s_testing = true;
+    if (connected_now) link_notify(false);
+    if (connected_now) { esp_wifi_disconnect(); vTaskDelay(pdMS_TO_TICKS(500)); }
+
+    wifi_config_t wc = { 0 };
+    strncpy((char *)wc.sta.ssid, t->ssid, sizeof wc.sta.ssid);
+    strncpy((char *)wc.sta.password, s_test_pass, sizeof wc.sta.password);
+    wc.sta.threshold.authmode = s_test_pass[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    esp_wifi_set_config(WIFI_IF_STA, &wc);
+    snprintf(t->step, sizeof t->step, "joining");
+    s_last_reason = 0;
+    xEventGroupClearBits(s_ev, EV_CONNECTED | EV_FAILED);
+    esp_wifi_connect();
+    /* one join can fail transiently: allow a second attempt inside 20 s */
+    EventBits_t b = 0;
+    for (int attempt = 0; attempt < 2 && !(b & EV_CONNECTED); attempt++) {
+        b = xEventGroupWaitBits(s_ev, EV_CONNECTED | EV_FAILED, pdTRUE, pdFALSE, pdMS_TO_TICKS(10000));
+        if (b & EV_CONNECTED) break;
+        bool bad_pw = s_last_reason == WIFI_REASON_AUTH_FAIL || s_last_reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
+                      s_last_reason == WIFI_REASON_HANDSHAKE_TIMEOUT;
+        if (attempt == 0 && !bad_pw) { vTaskDelay(pdMS_TO_TICKS(500)); esp_wifi_connect(); }
+        else break;
+    }
+    bool ok = b & EV_CONNECTED;              /* EV_CONNECTED is set on GOT_IP: association + DHCP both done */
+    if (ok) {
+        snprintf(t->ip, sizeof t->ip, "%s", s_ip);
+        wifi_ap_record_t ap; t->rssi = esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
+        snprintf(t->step, sizeof t->step, "dns");
+        struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_STREAM }, *res = NULL;
+        t->internet = getaddrinfo(TEST_HOST, "443", &hints, &res) == 0 && res;
+        if (res) freeaddrinfo(res);
+        ESP_LOGW(TAG, "test '%s': OK, ip %s, %d dBm, backend name %s", t->ssid, t->ip, t->rssi, t->internet ? "resolved" : "NOT resolved");
+        if (!t->stay && config_wifi_add(t->ssid, s_test_pass) == ESP_OK && config_wifi_save() == ESP_OK) t->saved = true;
+    } else {
+        t->reason = s_last_reason;
+        snprintf(t->error, sizeof t->error, "%s", (b & EV_FAILED) || s_last_reason ? reason_text(s_last_reason) : "no IP address (DHCP timeout)");
+        ESP_LOGW(TAG, "test '%s': FAILED (%s, reason %d)", t->ssid, t->error, s_last_reason);
+    }
+    memset(s_test_pass, 0, sizeof s_test_pass);
+
+    /* back to where we were: the previous network if there was one; with none (fallback AP) a working new network is
+     * kept — the AP retry task then sees the link and switches the AP off at its next tick. */
+    if (was && !(t->stay && ok)) {
+        snprintf(t->step, sizeof t->step, "restoring");
+        esp_wifi_disconnect(); vTaskDelay(pdMS_TO_TICKS(500));
+        esp_wifi_set_config(WIFI_IF_STA, &prev);
+        strlcpy(s_ssid, prev_ssid, sizeof s_ssid);
+        s_testing = false;
+        s_keepalive = true;
+        xEventGroupClearBits(s_ev, EV_CONNECTED | EV_FAILED);
+        esp_wifi_connect();
+        xEventGroupWaitBits(s_ev, EV_CONNECTED, pdTRUE, pdFALSE, pdMS_TO_TICKS(15000));
+        ESP_LOGW(TAG, "test done: back on '%s' (%s)", prev_ssid, s_connected ? s_ip : "not yet connected, retrying");
+    } else if (ok) {
+        strlcpy(s_ssid, t->ssid, sizeof s_ssid);           /* both 33 B; snprintf confuses -Wformat-truncation here */
+        s_testing = false;
+        s_keepalive = true;
+        link_notify(true);
+    } else {
+        s_testing = false;
+        esp_wifi_disconnect();
+    }
+    t->step[0] = 0;
+    t->state = ok ? NT_OK : NT_FAIL;
+    xSemaphoreGive(s_radio);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t start_job(const char *ssid, const char *pass, bool stay);
+esp_err_t net_test_start(const char *ssid, const char *pass) { return start_job(ssid, pass, false); }
+esp_err_t net_switch_start(const char *ssid)
+{
+    const cfg_wifi_list_t *wl = config_wifi_get();
+    for (int i = 0; i < wl->count; i++)
+        if (ssid && strcmp(wl->list[i].ssid, ssid) == 0) {
+            if (s_connected && strcmp(s_ssid, ssid) == 0) return ESP_ERR_INVALID_SIZE;   /* already there */
+            return start_job(ssid, wl->list[i].pass, true);
+        }
+    return ESP_ERR_NOT_FOUND;
+}
+static esp_err_t start_job(const char *ssid, const char *pass, bool stay)
+{
+    if (!ssid || !*ssid || strlen(ssid) > 32 || (pass && strlen(pass) > 64)) return ESP_ERR_INVALID_ARG;
+    if (pass && *pass && strlen(pass) < 8) return ESP_ERR_INVALID_ARG;          /* WPA2 minimum */
+    if (s_test.state == NT_RUNNING) return ESP_ERR_INVALID_STATE;
+    memset(&s_test, 0, sizeof s_test);
+    snprintf(s_test.ssid, sizeof s_test.ssid, "%s", ssid);
+    snprintf(s_test_pass, sizeof s_test_pass, "%s", pass ? pass : "");
+    snprintf(s_test.step, sizeof s_test.step, "waiting");
+    s_test.stay = stay;
+    s_test.state = NT_RUNNING;
+    if (xTaskCreatePinnedToCore(test_task, "wifi_test", 4096, NULL, 4, NULL, 0) != pdPASS) {
+        s_test.state = NT_FAIL; snprintf(s_test.error, sizeof s_test.error, "no memory");
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+
+void net_test_get(net_test_t *out) { *out = s_test; }
 
 bool net_is_connected(void) { return s_connected; }
 const char *net_ip(void) { return s_connected ? s_ip : s_ap_on ? AP_IP : "-"; }
@@ -220,4 +411,10 @@ esp_err_t net_start_mdns(const char *device_name, const char *fw_version)
 { ESP_LOGW(TAG, "mdns component not available"); return ESP_ERR_NOT_SUPPORTED; }
 #endif
 
-void net_set_link_hook(net_link_fn fn) { s_link_hook = fn; }
+esp_err_t net_add_link_hook(net_link_fn fn)
+{
+    if (!fn) return ESP_ERR_INVALID_ARG;
+    if (s_n_link_hooks >= LINK_HOOKS_MAX) return ESP_ERR_NO_MEM;
+    s_link_hooks[s_n_link_hooks++] = fn;             /* registered at boot, before the first join */
+    return ESP_OK;
+}

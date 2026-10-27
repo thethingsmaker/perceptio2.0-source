@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <inttypes.h>
 #include "cloud.h"
+#include "bus.h"
 #include "cloud_secrets.h"
 #include "config.h"
 #include "board.h"
@@ -211,7 +212,7 @@ static void publish_hello(void)
     cJSON_AddNumberToObject(st, "total_mb", in.storage_total_mb);
     cJSON_AddNumberToObject(st, "free_mb", in.storage_free_mb);
     cJSON *pw = cJSON_AddObjectToObject(j, "power");
-    cJSON_AddNumberToObject(pw, "battery_pct", in.battery_pct);
+    if (in.battery_pct >= 0) cJSON_AddNumberToObject(pw, "battery_pct", in.battery_pct); else cJSON_AddNullToObject(pw, "battery_pct");
     cJSON_AddBoolToObject  (pw, "charging", in.charging);
     cJSON_AddBoolToObject  (pw, "plugged", in.plugged);
     cJSON *nt = cJSON_AddObjectToObject(j, "net");
@@ -236,7 +237,7 @@ static void publish_telemetry(void)
     cloud_info_t in = { 0 }; if (s_info_fn) s_info_fn(&in);
     cJSON *j = cJSON_CreateObject();
     cJSON_AddNumberToObject(j, "utc_ms", (double)clock_utc_ms());
-    cJSON_AddNumberToObject(j, "battery_pct", in.battery_pct);
+    if (in.battery_pct >= 0) cJSON_AddNumberToObject(j, "battery_pct", in.battery_pct); else cJSON_AddNullToObject(j, "battery_pct");
     cJSON_AddBoolToObject  (j, "charging", in.charging);
     cJSON_AddNumberToObject(j, "rssi", in.rssi);
     cJSON_AddNumberToObject(j, "temp_c", in.temp_c);
@@ -422,7 +423,7 @@ static void handle_cmd(const char *payload, int len)
         if (tag && !cJSON_IsString(tag)) why = "bad_args";
         else if (tag && strlen(tag->valuestring) > 64) why = "bad_args";
         else if (cJSON_IsNumber(rate) && (int)rate->valuedouble != in.odr_hz) why = "bad_args";   /* ODR is a reboot parameter */
-        else if (in.battery_pct < 5 && !in.plugged) why = "battery_low";
+        else if (in.battery_pct >= 0 && in.battery_pct < 5 && !in.plugged) why = "battery_low";
         else {
             esp_err_t e = store_start(cJSON_IsString(tag) ? tag->valuestring : "", "cloud", rid);
             if (e == ESP_ERR_INVALID_STATE) why = "busy"; else if (e == ESP_ERR_NO_MEM) why = "storage_full"; else if (e != ESP_OK) why = "error";
@@ -687,6 +688,10 @@ static void crash_report(void)
 /* ------------------------------------------------------------------ */
 esp_err_t cloud_init(cloud_info_fn info)
 {
+    /* the cloud is one listener of the device bus: events/state/inventory announced by any module reach MQTT */
+    static const bus_sink_t sink = { .name = "cloud", .on_event = cloud_event, .on_state = cloud_set_state,
+                                     .on_inventory = cloud_inventory_changed };
+    bus_add_sink(&sink);
     s_info_fn = info;
     clock_set_sync_hook(on_clock_synced);
     load_identity();

@@ -4,7 +4,7 @@
 #include <errno.h>
 #include "upload.h"
 #include "store.h"
-#include "cloud.h"
+#include "bus.h"
 #include "config.h"
 #include "net.h"
 #include "sdkconfig.h"
@@ -36,6 +36,7 @@ typedef struct { char cmd_id[40], rec_id[32], url[160], token[72]; uint32_t chun
 typedef struct { uint32_t offset; char step[12]; char err[28]; int errno_; int8_t rssi; } drop_t;
 
 static upload_done_fn s_done;
+static char s_devid[16];                              /* for the User-Agent; given by main at init */
 static TaskHandle_t   s_task, s_reader;
 static job_t          s_job;
 static volatile bool  s_busy;
@@ -93,7 +94,7 @@ static int request(esp_http_client_handle_t c, const char *url, esp_http_client_
         char ev[160];
         snprintf(ev, sizeof ev, "{\"rec_id\":\"%s\",\"offset\":%" PRIu32 ",\"step\":\"%s\",\"err\":\"%s\",\"errno\":%d,\"rssi\":%d}",
                  s_job.rec_id, offset, step, d.err, en, d.rssi);
-        cloud_event("upload_retry", ev);
+        bus_event("upload_retry", ev);
         return -1;
     }
     return esp_http_client_get_status_code(c);
@@ -119,7 +120,7 @@ static void progress(uint32_t sent, bool force)
     static int64_t last;
     int64_t now = esp_timer_get_time();
     s_st.sent_bytes = sent;
-    if (force || now - last > PROGRESS_MS * 1000LL) { last = now; store_set_uploaded(s_job.rec_id, sent); cloud_inventory_changed(); }
+    if (force || now - last > PROGRESS_MS * 1000LL) { last = now; store_set_uploaded(s_job.rec_id, sent); bus_inventory_changed(); }
 }
 
 /* ------------------------------------------------------------------ */
@@ -154,7 +155,7 @@ static void run(void)
     if (!bufs[0] || !bufs[1]) { free(bufs[0]); free(bufs[1]); s_done(s_job.cmd_id, false, "io_error", NULL, NULL); return; }
 
     char ua[64], bearer[88], url[200];
-    snprintf(ua, sizeof ua, "Perceptio/%s (%s)", config_fw_version(), cloud_device_id());
+    snprintf(ua, sizeof ua, "Perceptio/%s (%s)", config_fw_version(), s_devid);
     snprintf(bearer, sizeof bearer, "Bearer %s", s_job.token);
     esp_http_client_config_t cfg = {
         .url = s_job.url, .crt_bundle_attach = esp_crt_bundle_attach, .event_handler = on_http,
@@ -167,7 +168,7 @@ static void run(void)
     esp_wifi_set_ps(WIFI_PS_NONE);                        /* modem sleep delays TCP ACKs to the next beacon: off while uploading */
     memset(&s_stats, 0, sizeof s_stats); s_stats.t0 = esp_timer_get_time(); s_stats.heap_min = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     link_info(&s_stats.rssi, s_stats.phy, sizeof s_stats.phy);
-    cloud_set_state("uploading");
+    bus_state("uploading");
     ESP_LOGI(TAG, "%s: %" PRIu32 " bytes to %s (chunk %" PRIu32 ") — rssi %d dBm, phy %s, ps %d->0, heap %u KB, TLS record %d B",
              s_job.rec_id, total, s_job.url, s_job.chunk, s_stats.rssi, s_stats.phy, (int)ps_prev,
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10), CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN);
@@ -279,7 +280,7 @@ out:
     free(bufs[0]); free(bufs[1]);
     esp_wifi_set_ps(ps_prev);
     s_st.phase = UP_IDLE;
-    if (!store_is_recording()) cloud_set_state("idle");
+    if (!store_is_recording()) bus_state("idle");
 
     /* stats for the ack (firmware-upload-speed.md §1 + follow-up) */
     static char stats[640];
@@ -310,8 +311,9 @@ static void task(void *arg)
 }
 
 /* ------------------------------------------------------------------ */
-esp_err_t upload_init(upload_done_fn done)
+esp_err_t upload_init(upload_done_fn done, const char *device_id)
 {
+    strlcpy(s_devid, device_id ? device_id : "?", sizeof s_devid);
     s_done = done;
     /* the effective build values that decide upload throughput — compare with docs/firmware-upload-speed.md §2 */
 #if defined(CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM)

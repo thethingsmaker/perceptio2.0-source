@@ -12,7 +12,7 @@ The embedded web page uses exactly this API; the mobile app must not need anythi
 | | |
 |---|---|
 | `GET /info` | static identity: `name, model, fw, hw, api, mac, ip, title` ("Perceptio2.0-<last IP octet, 3 digits>-<yyy, reserved: 000>"), `idf, chip_rev, odr_hz, xl_fs_g, gy_fs_dps` (the last three are the **active** IMU configuration — use them to scale the live stream) |
-| `GET /status` | live numbers, poll at ≤ 2 Hz: `uptime` (s), `heap_free`, `heap_min` (bytes), `vbat` (V), `vbat_cal` (bool: eFuse-calibrated ADC), `soc_pct` (0–100, estimated from voltage — no fuel gauge; ±10 %), `vin` (bool, USB present), `chg` (0 not charging · 1 CC · 2 CV · 3 charge done — also reported when no battery is connected), `rssi` (dBm), `ip`, `title` (browser title, follows the IP), `imu_hz`, `imu_total`, `imu_missed` (DRDY timeouts — must stay 0), `imu_temp` (°C), `accel_mg[3]`, `gyro_dps[3]`, `hg_mg[3]` (high-g channel), `hg_peak_g` (max |a_hg| over the last second), `time` `{valid, epoch, local, tz, source: none/ntp/app/rtc, last_sync, age_s}`, `rec` `{state: idle/recording/stopping, rec_id, rec_tag, elapsed_ms, samples, dropped, pages, backlog_max (while recording), count, total_mb, free_mb}`, `upload` `{phase: idle/resuming/sending/verifying/backoff, rec_id, sent_bytes, total_bytes, retries, last_error}`, `tests_pass`, `tests_total` |
+| `GET /status` | live numbers, poll at ≤ 2 Hz: `uptime` (s), `heap_free`, `heap_min` (bytes), `vbat` (V), `vbat_cal` (bool: eFuse-calibrated ADC), `soc_pct` (0–100, estimated from the averaged voltage and rate-limited to 1 %/10 s — no fuel gauge; `null` when no battery is connected), `battery` (bool: false = no cell, USB power only), `vin` (bool, USB present), `chg` (0 not charging · 1 CC · 2 CV · 3 charge done — also reported when no battery is connected), `rssi` (dBm), `ip`, `title` (browser title, follows the IP), `imu_hz`, `imu_total`, `imu_missed` (DRDY timeouts — must stay 0), `imu_temp` (°C), `accel_mg[3]`, `gyro_dps[3]`, `hg_mg[3]` (high-g channel), `hg_peak_g` (max |a_hg| over the last second), `time` `{valid, epoch, local, tz, source: none/ntp/app/rtc, last_sync, age_s}`, `rec` `{state: idle/recording/stopping, rec_id, rec_tag, elapsed_ms, samples, dropped, pages, backlog_max (while recording), count, total_mb, free_mb}`, `upload` `{phase: idle/resuming/sending/verifying/backoff, rec_id, sent_bytes, total_bytes, retries, last_error}`, `tests_pass`, `tests_total` |
 
 ## Parameters (self-describing)
 
@@ -40,7 +40,7 @@ Current parameters: `dev_name, odr_hz, xl_fs_g, gy_fs_dps, hg_fs_g, session_max,
 
 | | |
 |---|---|
-| `GET /wifi` | `[{ssid, open}]` in boot priority order; passwords are never returned |
+| `GET /wifi` | `[{ssid, open, connected}]` in boot priority order (first = preferred); passwords are never returned |
 | `POST /wifi` | `{ssid, pass}` — add, or update the password if the SSID exists; returns the list |
 | `DELETE /wifi/<url-encoded ssid>` | remove; returns the list |
 
@@ -51,6 +51,10 @@ Max 8 networks. SSID ≤ 32 bytes, password ≤ 64.
 | | |
 |---|---|
 | `GET /wifi/scan` | nearby networks, blocks ~2–3 s: `[{ssid, rssi, channel, open}]`, unique SSIDs, strongest first, hidden ones omitted. 409 while a connect attempt is running |
+| `POST /wifi/test` | `{ssid, pass}` → 202: joins that network, waits for DHCP, resolves the backend host, saves it **only on success**, then returns to the previous network (with none — fallback AP — it stays on the new one). Takes 5–40 s; while connected elsewhere the board is away from the current network meanwhile. 409 while recording/uploading/updating or another test runs; 400 for a password of 1–7 chars |
+| `POST /wifi/connect` | `{ssid}` of a saved network → 202: switch to it now (same steps as the test; stays there if it works, nothing saved; on failure returns to the previous network). Progress in `GET /wifi/test` with `mode:"connect"`. 404 not saved, 409 already connected / busy / recording |
+| `POST /wifi/prefer` | `{ssid}`: moves it to the top of the saved list (tried first at boot and by the fallback-AP retries); answers like `GET /wifi` |
+| `GET /wifi/test` | `{state: idle/running/ok/failed, ssid, step?, ip?, rssi?, internet?, saved?, error?, reason?, current_ssid}` — poll it; requests fail while the board is away from the network |
 | `POST /reboot` | `{"ok":true}` then restart ~200 ms later |
 | `GET /ota` | `{phase, running, slot, pending_verify, repo, token_set, token_hint, checked, latest?, asset?, asset_bytes?, published?, update_available?, received_bytes?, total_bytes?, error?}` — phase: idle, checking, downloading, verifying, rebooting, error |
 | `POST /ota/check` | asks GitHub for the latest Release of parameter `ota_repo`; answers like `GET /ota` (poll it while `phase != idle`). 409 while recording/uploading/busy |
@@ -71,7 +75,7 @@ Max 8 networks. SSID ≤ 32 bytes, password ≤ 64.
 | `GET /recordings/<rec_id>` | the recording as a **PCR2** file (`docs/data-v2.md`), `application/octet-stream`, `<rec_id>.pcr2` — byte-identical to what the upload sends. Validate with `tools/pcr2_dump.py`. 409 while recording. |
 | `DELETE /recordings/<rec_id>` | erases it; returns the list. 409 while recording. |
 
-A recording also starts/stops with a **short press** of the racket button and from the backend (`start_recording` / `stop_recording`
+A recording also starts/stops with a **double press** of the racket button (two presses of ≥ 0.3 s each within 1.5 s; a single press does nothing, holding 3 s powers off) and from the backend (`start_recording` / `stop_recording`
 commands); the UI shows whoever started it. Capacity at 960 Hz × 20 B: ~1.15 MB/min → ~110 min on the 126 MB usable
 (480 Hz doubles it). The session stops by itself at `session_max` minutes or when the storage is full.
 

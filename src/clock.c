@@ -71,6 +71,8 @@ esp_err_t clock_init(const char *posix_tz)
     return ESP_OK;
 }
 
+void clock_link(bool up) { if (up) clock_network_up(); }
+
 void clock_network_up(void)
 {
     snapshot();

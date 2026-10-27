@@ -18,6 +18,16 @@ float     power_vbat(void);                 /* volts, calibrated when eFuse data
 /* State of charge 0..100 % estimated from terminal voltage (LiPo OCV table). No fuel gauge on the board:
  * reads high while charging, low under heavy load; good to ~10 %. */
 int       power_soc_pct(float vbat, bool charging);
+/* Battery gauge for display (no fuel-gauge chip). Call once per second from the main loop. VBAT is averaged
+ * (tau ~10 s, so Wi-Fi TX dips and charger transitions do not show), and the shown percentage moves at most 1 % per
+ * 10 s: never down while charging, never up on battery (except to correct an offset > 10 %). */
+void      power_battery_tick(bool plugged, bool charging, bool done);
+float     power_vbat_avg(void);                /* averaged VBAT (falls back to an instant reading before the first tick) */
+int       power_soc_display(void);             /* smoothed 0-100 %; -1 before the first tick or with no battery */
+/* No cell connected (USB only): the charger then toggles charging <-> done every few seconds and the BAT pin swings.
+ * Detected from >= 4 such toggles in 60 s or a > 0.30 V VBAT swing within 10 s while USB is present; cleared after
+ * 60 s without either sign. */
+bool      power_battery_present(void);
 bool      power_vbat_calibrated(void);
 esp_err_t power_charger_status(bq25180_status_t *st);
 /* /INT edge counter (diagnostics) and optional callback */

@@ -96,6 +96,57 @@ power_btn_t power_poll_button(void)
     return k;
 }
 
+static float   s_vavg;
+static int     s_soc = -1;
+static uint32_t s_ticks;                        /* 1 s gauge ticks since boot */
+static bool    s_nobat;
+static uint32_t s_nobat_last;                          /* tick of the last no-battery sign */
+static uint32_t s_toggle_t[8];                         /* ticks of recent charging<->done toggles (ring) */
+static int     s_toggle_i, s_last_cs = -1;
+static float   s_vwin[10];                             /* last 10 s of raw VBAT */
+
+static bool nobat_signs(bool plugged, bool charging, bool done, float v)
+{
+    int cs = done ? 2 : charging ? 1 : 0;
+    if (s_last_cs >= 0 && cs != s_last_cs && (cs == 2 || s_last_cs == 2)) {     /* a toggle into or out of "done" */
+        s_toggle_t[s_toggle_i] = s_ticks + 1; s_toggle_i = (s_toggle_i + 1) % 8;
+    }
+    s_last_cs = cs;
+    s_vwin[s_ticks % 10] = v;
+    if (!plugged) return false;                        /* running on battery: there is one */
+    int toggles = 0;
+    for (int i = 0; i < 8; i++) if (s_toggle_t[i] && s_ticks + 1 - s_toggle_t[i] < 60) toggles++;
+    float lo = 9, hi = 0;
+    int n = s_ticks + 1 < 10 ? (int)s_ticks + 1 : 10;
+    for (int i = 0; i < n; i++) { if (s_vwin[i] < lo) lo = s_vwin[i]; if (s_vwin[i] > hi) hi = s_vwin[i]; }
+    return toggles >= 4 || (n >= 3 && hi - lo > 0.30f);
+}
+
+void power_battery_tick(bool plugged, bool charging, bool done)
+{
+    float v = power_vbat();
+    if (nobat_signs(plugged, charging, done, v)) {
+        if (!s_nobat) ESP_LOGW(TAG, "no battery detected (charger toggling / VBAT swinging on USB)");
+        s_nobat = true; s_nobat_last = s_ticks;
+    } else if (s_nobat && s_ticks - s_nobat_last > 60) {
+        s_nobat = false;
+        ESP_LOGW(TAG, "battery present again");
+    }
+    if (s_nobat) { s_soc = -1; s_ticks++; s_vavg = v; return; }          /* restart the gauge when a cell appears */
+    s_vavg = s_soc < 0 ? v : s_vavg + (v - s_vavg) * 0.1f;            /* 1 s ticks: tau ~10 s */
+    int target = (plugged && done) ? 100 : power_soc_pct(s_vavg, charging);
+    s_ticks++;
+    static uint32_t s_follow_until;
+    if (s_soc < 0) s_follow_until = s_ticks + 15;
+    if (s_soc < 0 || s_ticks <= s_follow_until) { s_soc = target; return; }   /* first 15 s: follow while the average settles */
+    if (s_ticks % 10) return;                                           /* at most one step per 10 s */
+    if (target > s_soc && (charging || done || target - s_soc > 10)) s_soc++;
+    else if (target < s_soc && (!charging || s_soc - target > 10)) s_soc--;
+}
+float power_vbat_avg(void) { return s_ticks ? s_vavg : power_vbat(); }
+int   power_soc_display(void) { return s_nobat ? -1 : s_soc; }
+bool  power_battery_present(void) { return !s_nobat; }
+
 int power_soc_pct(float v, bool charging)
 {
     /* typical 1-cell LiPo open-circuit voltage vs SoC */

@@ -64,6 +64,66 @@ canvas{display:block;width:100%;height:230px;background:var(--card);border:1px s
 .toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(20px);background:var(--txt);color:var(--bg);padding:10px 16px;border-radius:10px;font-weight:600;opacity:0;transition:.25s;pointer-events:none;z-index:9}
 .toast.show{opacity:1;transform:translateX(-50%)}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+/* ---- Network tab ---- */
+.ic{width:20px;height:20px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ic.sm{width:15px;height:15px}
+.nw-hero{display:flex;align-items:center;gap:16px;padding:18px;background:linear-gradient(135deg,color-mix(in srgb,var(--acc) 18%,var(--card)),var(--card) 60%);border:1px solid color-mix(in srgb,var(--acc) 30%,var(--line));border-radius:18px;box-shadow:var(--sh)}
+.nw-hero.ap{background:linear-gradient(135deg,color-mix(in srgb,var(--warn) 18%,var(--card)),var(--card) 60%);border-color:color-mix(in srgb,var(--warn) 30%,var(--line))}
+.nw-hero.off{background:var(--card)}
+.nw-badge{width:52px;height:52px;border-radius:16px;display:grid;place-items:center;background:color-mix(in srgb,var(--acc) 20%,transparent);color:var(--acc);flex:none}
+.nw-hero.ap .nw-badge{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn)}
+.nw-hero.off .nw-badge{background:var(--card2);color:var(--mut)}
+.nw-badge .ic{width:28px;height:28px}
+.nw-hero .t{font-size:12px;color:var(--mut);font-weight:650;text-transform:uppercase;letter-spacing:.7px}
+.nw-hero .s{font-size:20px;font-weight:700;margin:2px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nw-hero .m{display:flex;flex-wrap:wrap;gap:6px 14px;color:var(--mut);font-size:13px}
+.nw-hero .m span{display:inline-flex;align-items:center;gap:5px}
+.nw-list{background:var(--card);border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:var(--sh)}
+.nw-item{display:flex;align-items:center;gap:12px;padding:12px 14px;border-top:1px solid var(--line);transition:background .15s}
+.nw-item:first-child{border-top:0}
+.nw-item.pick{cursor:pointer}.nw-item.pick:hover{background:var(--card2)}
+.nw-item.sel{background:color-mix(in srgb,var(--acc) 12%,transparent)}
+.nw-tile{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:var(--card2);color:var(--mut);flex:none}
+.nw-item.on .nw-tile{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.nw-name{flex:1;min-width:0}
+.nw-name b{display:block;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nw-name small{display:flex;align-items:center;gap:5px;color:var(--mut);font-size:12.5px;margin-top:1px}
+.nw-pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,transparent);padding:4px 10px;border-radius:999px;white-space:nowrap}
+.nw-pill:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok);animation:nwpulse 1.8s infinite}
+@keyframes nwpulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 60%,transparent)}70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.ib{width:38px;height:38px;border-radius:12px;border:0;background:transparent;color:var(--mut);display:grid;place-items:center;cursor:pointer;flex:none;transition:background .15s,color .15s,transform .1s}
+.ib:hover{background:var(--card2);color:var(--txt)}.ib:active{transform:scale(.92)}
+.ib.star.on{color:#ffc53d}.ib.star.on .ic{fill:#ffc53d}
+.ib.star:not(.on):hover{color:#ffc53d}
+.ib.del:hover{color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,transparent)}
+.ib.go{color:var(--acc)}.ib.go:hover{background:color-mix(in srgb,var(--acc) 14%,transparent)}
+.ib:disabled{opacity:.4;cursor:default}
+.nw-head{display:flex;align-items:center;justify-content:space-between;margin:22px 0 10px}
+.nw-head h2{margin:0}
+.nw-chip{display:inline-flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--line);color:var(--txt);border-radius:999px;padding:7px 14px;font:inherit;font-size:13px;font-weight:650;cursor:pointer}
+.nw-chip:hover{border-color:var(--acc);color:var(--acc)}
+.nw-chip:disabled{opacity:.6;cursor:default}
+.spin{width:15px;height:15px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+.sig{display:inline-flex}.sig .ic{width:22px;height:22px}
+.sig path,.sig circle{opacity:.25}.sig .lit{opacity:1}
+.nw-form{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;box-shadow:var(--sh);display:grid;gap:12px}
+.fld{position:relative;display:flex;align-items:center}
+.fld>.ic{position:absolute;left:12px;color:var(--mut);pointer-events:none}
+.fld input{width:100%;padding:12px 44px 12px 40px;border-radius:12px;font-size:15px}
+.fld .ib{position:absolute;right:3px;width:36px;height:36px}
+.nw-acts{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.btn.big{display:inline-flex;align-items:center;gap:8px;padding:12px 18px;border-radius:12px}
+.lnk{background:none;border:0;color:var(--mut);font:inherit;font-size:13px;cursor:pointer;padding:8px}
+.lnk:hover{color:var(--txt);text-decoration:underline}
+.nw-alert{display:none;align-items:flex-start;gap:10px;padding:12px 14px;border-radius:12px;font-size:14px;line-height:1.4}
+.nw-alert.show{display:flex}
+.nw-alert.run{background:color-mix(in srgb,var(--acc) 12%,transparent);color:var(--txt)}
+.nw-alert.run .spin{color:var(--acc);margin-top:2px}
+.nw-alert.ok{background:color-mix(in srgb,var(--ok) 13%,transparent)}.nw-alert.ok>.ic{color:var(--ok)}
+.nw-alert.bad{background:color-mix(in srgb,var(--bad) 13%,transparent)}.nw-alert.bad>.ic{color:var(--bad)}
+.nw-alert.warn{background:color-mix(in srgb,var(--warn) 14%,transparent)}.nw-alert.warn>.ic{color:var(--warn)}
+.nw-empty{padding:22px;text-align:center;color:var(--mut);font-size:14px}
 @media (max-width:720px){
   /* no backdrop-filter here: it would make the header the containing block of the fixed bottom nav */
   header{padding:12px 16px;padding-top:calc(12px + env(safe-area-inset-top));backdrop-filter:none;background:var(--bg)}
@@ -157,17 +217,26 @@ canvas{display:block;width:100%;height:230px;background:var(--card);border:1px s
 </section>
 
 <section id="net">
-  <h2 style="margin-top:0">Saved networks <span class="tag">tried in order at boot</span></h2>
-  <div class="card" id="wifilist"></div>
-  <h2>Add network</h2>
-  <div class="card">
-    <div class="row"><div class="l"><b>Nearby networks</b><span>tap one to fill in the name</span></div><button class="btn ghost" id="scanbtn" onclick="scanWifi()">Search</button></div>
-    <div id="scanlist"></div>
-    <div class="row" style="flex-wrap:wrap">
-    <input id="ssid" placeholder="SSID" autocapitalize="off" autocorrect="off" spellcheck="false" style="flex:1 1 140px">
-    <span style="flex:1 1 140px;display:flex;gap:6px"><input id="pass" placeholder="Password" type="password" autocapitalize="off" autocorrect="off" spellcheck="false" style="flex:1;min-width:0"><button class="btn ghost" id="passeye" type="button" onclick="togglePass()" title="Show password">Show</button></span>
-    <button class="btn" onclick="addWifi()">Add</button></div></div>
-  <h2>Device</h2>
+  <div class="nw-hero off" id="nwhero">
+    <div class="nw-badge" id="nwbadge"></div>
+    <div style="min-width:0;flex:1"><div class="t" id="nwmode">Connection</div><div class="s" id="nwssid">—</div><div class="m" id="nwmeta"></div></div>
+  </div>
+
+  <div class="nw-head"><h2>Saved networks</h2><span class="tag" title="Tried in this order; the starred one first">★ = tried first</span></div>
+  <div class="nw-list" id="wifilist"></div>
+
+  <div class="nw-head"><h2>Nearby</h2><button class="nw-chip" id="scanbtn" onclick="scanWifi()"></button></div>
+  <div class="nw-list" id="scanlist"><div class="nw-empty">Tap <b>Search</b> to find networks around the board</div></div>
+
+  <div class="nw-head"><h2>Add network</h2></div>
+  <div class="nw-form">
+    <div class="fld"><svg class="ic" id="ssidic"></svg><input id="ssid" placeholder="Network name (SSID)" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+    <div class="fld"><svg class="ic" id="passic"></svg><input id="pass" placeholder="Password" type="password" autocapitalize="off" autocorrect="off" spellcheck="false" onkeydown="if(event.key==='Enter')testWifi()"><button class="ib" id="passeye" type="button" onclick="togglePass()" title="Show password"></button></div>
+    <div class="nw-acts"><button class="btn big" id="testbtn" onclick="testWifi()"></button><span class="spacer"></span><button class="lnk" onclick="addWifi()" title="Save without checking the password (e.g. a network that is not in range now)">Save without testing</button></div>
+    <div class="nw-alert" id="wtest"></div>
+  </div>
+
+  <div class="nw-head"><h2>Device</h2></div>
   <div class="card mono" id="devinfo"></div>
 </section>
 </main>
@@ -184,7 +253,9 @@ $('nav').onclick=e=>{const b=e.target.closest('button');if(!b)return;tab=b.datas
   document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('act',x===b));
   document.querySelectorAll('main section').forEach(s=>s.classList.toggle('act',s.id===tab));
   if(tab==='live')openWs();else closeWs();if(tab==='set'){loadSchema();loadSelftest();otaLoad()}if(tab==='net')loadWifi();if(tab==='rec')loadRecs();location.hash=tab};
-if(location.hash){const b=document.querySelector(`nav button[data-t="${location.hash.slice(1)}"]`);b&&b.click()}
+/* restore the tab from the URL after the whole script ran (the handler touches state declared further down;
+   running it here threw and stopped the rest of the script on any reload with #tab in the URL) */
+if(location.hash)setTimeout(()=>{const b=document.querySelector(`nav button[data-t="${location.hash.slice(1)}"]`);b&&b.click()},0);
 
 /* ---- info + status ---- */
 const CH=['not charging','charging (CC)','charging (CV)','charge completed'];
@@ -193,9 +264,10 @@ api('/info').then(i=>{info=i;$('hname').textContent=i.name;if(i.title)document.t
   $('devinfo').innerHTML=Object.entries(i).map(([k,v])=>`<div class="row"><div class="l"><span>${k}</span></div><div>${v}</div></div>`).join('')}).catch(()=>{});
 async function poll(){const t0=performance.now();try{const s=await api('/status');const dt=performance.now()-t0;
   $('dot').classList.add('on');$('hsub').textContent=s.ip+' · '+s.rssi+' dBm';if(s.title&&document.title!==s.title)document.title=s.title;
-  $('soc').textContent=s.soc_pct;$('bolt').style.display=(s.chg==1||s.chg==2)?'inline':'none';
-  $('chg').textContent=s.vbat.toFixed(2)+' V · '+(s.vin?'USB · ':'battery · ')+CH[s.chg];
-  const bb=$('batbar');bb.style.width=s.soc_pct+'%';bb.style.background=s.soc_pct<15?'var(--bad)':s.soc_pct<35?'var(--warn)':'var(--ok)';
+  const nob=s.battery===false;
+  $('soc').textContent=nob?'—':s.soc_pct;$('bolt').style.display=(!nob&&(s.chg==1||s.chg==2))?'inline':'none';
+  $('chg').textContent=nob?'No battery · USB power':s.vbat.toFixed(2)+' V · '+(s.vin?'USB · ':'battery · ')+CH[s.chg];
+  const bb=$('batbar');bb.style.width=(nob?0:s.soc_pct)+'%';bb.style.background=s.soc_pct<15?'var(--bad)':s.soc_pct<35?'var(--warn)':'var(--ok)';
   const nb=s.rssi>=-55?4:s.rssi>=-65?3:s.rssi>=-75?2:s.rssi>=-88?1:0;document.querySelectorAll('#bars i').forEach((b,i)=>b.classList.toggle('on',i<nb));
   $('rate').innerHTML=s.imu_hz+'<small>Hz</small>';$('peak').innerHTML=s.hg_peak_g.toFixed(1)+'<small>g</small>';$('tot').textContent=s.imu_total.toLocaleString()+' samples · '+s.imu_missed+' missed';
   $('rssi').textContent=s.rssi;$('ip').textContent=s.ip;
@@ -284,18 +356,87 @@ async function powerOff(){let rec=false;try{const s=await api('/status');rec=s.r
 async function reboot(){if(!confirm('Restart the device?'))return;await api('/reboot',{method:'POST'});toast('Restarting…');setTimeout(()=>location.reload(),6000)}
 
 /* ---- wifi ---- */
-async function loadWifi(){const l=await api('/wifi');$('wifilist').innerHTML=l.length?l.map((n,i)=>`<div class="row"><div class="l"><b>${esc(n.ssid)}</b><span>${n.open?'open':'WPA2'} · priority ${i+1}</span></div><button class="btn ghost" onclick="delWifi('${esc(n.ssid)}')">Remove</button></div>`).join('')
-  :'<div class="row"><div class="l"><span>No networks saved</span></div></div>';}
-async function addWifi(){const ssid=$('ssid').value.trim(),pass=$('pass').value;if(!ssid)return;
-  await api('/wifi',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ssid,pass})});$('ssid').value='';$('pass').value='';$('pass').type='password';$('passeye').textContent='Show';toast('Saved');loadWifi()}
-function bars(r){return r>=-55?'▂▄▆█':r>=-67?'▂▄▆':r>=-78?'▂▄':'▂'}
-async function scanWifi(){const b=$('scanbtn');b.disabled=true;b.textContent='Searching…';
-  try{const l=await api('/wifi/scan');$('scanlist').innerHTML=l.length?l.map(n=>`<div class="row" style="cursor:pointer" onclick="pickWifi(this.dataset.s,${n.open})" data-s="${esc(n.ssid)}"><div class="l"><b>${esc(n.ssid)}</b><span>${n.open?'open':'secured'} · ch ${n.channel} · ${n.rssi} dBm</span></div><span class="mono">${bars(n.rssi)}</span></div>`).join('')
-    :'<div class="row"><div class="l"><span>No networks found</span></div></div>'}catch(e){toast('Search failed: '+e.message,true)}
-  b.disabled=false;b.textContent='Search'}
-function pickWifi(ssid,open){$('ssid').value=ssid;$('pass').value='';if(open){$('pass').placeholder='open network — no password'}else{$('pass').placeholder='Password';$('pass').focus()}}
-function togglePass(){const p=$('pass'),show=p.type==='password';p.type=show?'text':'password';$('passeye').textContent=show?'Hide':'Show';$('passeye').title=show?'Hide password':'Show password'}
-async function delWifi(ssid){await api('/wifi/'+encodeURIComponent(ssid),{method:'DELETE'});toast('Removed');loadWifi()}
+const IC={
+ wifi:'<path d="M1.5 8.5a15 15 0 0 1 21 0"/><path d="M5 12a10 10 0 0 1 14 0"/><path d="M8.5 15.5a5 5 0 0 1 7 0"/><circle cx="12" cy="19" r="1.2" fill="currentColor"/>',
+ lock:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+ unlock:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/>',
+ star:'<path d="M12 2.8l2.8 5.7 6.3.9-4.6 4.4 1.1 6.2L12 17l-5.6 3 1.1-6.2L2.9 9.4l6.3-.9z"/>',
+ go:'<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/>',
+ trash:'<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/>',
+ search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+ eye:'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+ eyeoff:'<path d="M9.9 5.2A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3 3.9M6.6 6.6C3.7 8.4 2 12 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="M3 3l18 18"/>',
+ check:'<path d="M20 6 9 17l-5-5"/>', x:'<path d="M18 6 6 18M6 6l12 12"/>', warn:'<path d="M12 3 2 21h20z"/><path d="M12 10v5M12 18h.01"/>',
+ chev:'<path d="M9 18l6-6-6-6"/>', globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+ ap:'<path d="M4.9 19.1a10 10 0 0 1 0-14.2M19.1 4.9a10 10 0 0 1 0 14.2M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4"/><circle cx="12" cy="12" r="2"/>',
+ off:'<path d="M3 3l18 18"/><path d="M8.5 15.5a5 5 0 0 1 7 0M5 12a10 10 0 0 1 4.2-2.6M1.5 8.5A15 15 0 0 1 6 5.6M14.5 9.4A10 10 0 0 1 19 12M17.9 6.1a15 15 0 0 1 4.6 2.4"/><circle cx="12" cy="19" r="1.2" fill="currentColor"/>',
+ chan:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'
+};
+const ic=(n,c='ic')=>`<svg class="${c}" viewBox="0 0 24 24">${IC[n]}</svg>`;
+function sig(r){const lv=r>=-55?3:r>=-67?2:r>=-78?1:0;const col=lv>=2?'var(--ok)':lv===1?'var(--warn)':'var(--bad)';
+  return `<span class="sig" style="color:${col}" title="${r} dBm"><svg class="ic" viewBox="0 0 24 24"><path class="${lv>=3?'lit':''}" d="M1.5 8.5a15 15 0 0 1 21 0"/><path class="${lv>=2?'lit':''}" d="M5 12a10 10 0 0 1 14 0"/><path class="${lv>=1?'lit':''}" d="M8.5 15.5a5 5 0 0 1 7 0"/><circle class="lit" cx="12" cy="19" r="1.2" fill="currentColor"/></svg></span>`}
+function nwIcons(){$('ssidic').outerHTML=ic('wifi');$('passic').outerHTML=ic('lock');$('passeye').innerHTML=ic('eye');
+  $('testbtn').innerHTML=ic('check')+'Test &amp; save';$('scanbtn').innerHTML=ic('search','ic sm')+'Search'}
+let wifiList=[];
+async function loadWifi(){let l=[],st=null;try{[l,st]=await Promise.all([api('/wifi'),api('/status')])}catch(e){}
+  wifiList=l;const cur=l.find(n=>n.connected);
+  const h=$('nwhero'),ap=!cur&&st&&st.ip==='192.168.4.1';h.className='nw-hero'+(cur?'':ap?' ap':' off');
+  $('nwbadge').innerHTML=ic(cur?'wifi':ap?'ap':'off');
+  $('nwmode').textContent=cur?'Connected':ap?'Access point mode':'Not connected';
+  $('nwssid').textContent=cur?cur.ssid:ap?('Perceptio-'+(info?info.device_id:'…')):'No network';
+  $('nwmeta').innerHTML=cur&&st?`<span>${ic('globe','ic sm')}${st.ip}</span><span>${sig(st.rssi)}${st.rssi} dBm</span>`
+    :ap?`<span>${ic('globe','ic sm')}192.168.4.1</span><span>password <b>perceptio</b></span>`:'<span>Add a network below</span>';
+  $('wifilist').innerHTML=l.length?l.map((n,i)=>`<div class="nw-item${n.connected?' on':''}" data-s="${esc(n.ssid)}">
+    <div class="nw-tile">${ic('wifi')}</div>
+    <div class="nw-name"><b>${esc(n.ssid)}</b><small>${ic(n.open?'unlock':'lock','ic sm')}${n.open?'Open':'WPA2'} · priority ${i+1}</small></div>
+    ${n.connected?'<span class="nw-pill">Connected</span>':`<button class="ib go" title="Connect now" onclick="connectWifi(this.closest('.nw-item').dataset.s)">${ic('go')}</button>`}
+    <button class="ib star${i===0?' on':''}" title="${i===0?'Preferred: tried first':'Make preferred'}" ${i===0?'':`onclick="preferWifi(this.closest('.nw-item').dataset.s)"`}>${ic('star')}</button>
+    <button class="ib del" title="Remove" onclick="delWifi(this.closest('.nw-item').dataset.s)">${ic('trash')}</button></div>`).join('')
+  :'<div class="nw-empty">No saved networks yet</div>'}
+async function addWifi(){const ssid=$('ssid').value.trim(),pass=$('pass').value;if(!ssid){toast('Enter or pick a network',true);return}
+  try{await api('/wifi',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ssid,pass})})}catch(e){toast('Save failed: '+e.message,true);return}
+  clearForm();toast('Saved (not tested)');loadWifi()}
+function clearForm(){$('ssid').value='';$('pass').value='';$('pass').type='password';$('passeye').innerHTML=ic('eye');$('pass').placeholder='Password';
+  document.querySelectorAll('#scanlist .sel').forEach(e=>e.classList.remove('sel'))}
+async function scanWifi(){const b=$('scanbtn');b.disabled=true;b.innerHTML='<span class="spin"></span>Searching…';
+  try{const l=await api('/wifi/scan');const saved=new Set(wifiList.map(n=>n.ssid));
+    $('scanlist').innerHTML=l.length?l.map(n=>`<div class="nw-item pick" data-s="${esc(n.ssid)}" data-o="${n.open?1:0}" onclick="pickWifi(this)">
+      <div class="nw-tile" style="background:transparent">${sig(n.rssi)}</div>
+      <div class="nw-name"><b>${esc(n.ssid)}</b><small>${ic(n.open?'unlock':'lock','ic sm')}${n.open?'Open':'Secured'} · ch ${n.channel} · ${n.rssi} dBm${saved.has(n.ssid)?' · <span style="color:var(--acc)">saved</span>':''}</small></div>
+      ${ic('chev','ic sm')}</div>`).join('')
+    :'<div class="nw-empty">No networks found</div>'}catch(e){toast('Search failed: '+e.message,true)}
+  b.disabled=false;b.innerHTML=ic('search','ic sm')+'Search'}
+function pickWifi(el){document.querySelectorAll('#scanlist .sel').forEach(e=>e.classList.remove('sel'));el.classList.add('sel');
+  $('ssid').value=el.dataset.s;$('pass').value='';const open=el.dataset.o==='1';
+  $('pass').placeholder=open?'Open network — no password':'Password';if(!open)$('pass').focus();$('ssid').scrollIntoView({behavior:'smooth',block:'center'})}
+function togglePass(){const p=$('pass'),show=p.type==='password';p.type=show?'text':'password';$('passeye').innerHTML=ic(show?'eyeoff':'eye');$('passeye').title=show?'Hide password':'Show password'}
+async function preferWifi(ssid){try{await api('/wifi/prefer',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ssid})});toast('★ '+ssid+' is now tried first');loadWifi()}catch(e){toast('Failed: '+e.message,true)}}
+async function delWifi(ssid){if(!confirm('Remove "'+ssid+'" from the saved networks?'))return;
+  try{await api('/wifi/'+encodeURIComponent(ssid),{method:'DELETE'});toast('Removed');loadWifi()}catch(e){toast('Remove failed: '+e.message,true)}}
+function alertBox(kind,html){const a=$('wtest');a.className='nw-alert show '+kind;
+  a.innerHTML=(kind==='run'?'<span class="spin"></span>':ic(kind==='ok'?'check':kind==='warn'?'warn':'x'))+'<div>'+html+'</div>'}
+let wtTimer=0,wtMiss=0;
+async function connectWifi(ssid){let cur='';try{cur=(await api('/wifi/test')).current_ssid}catch(e){}
+  if(!confirm('Switch the board to "'+ssid+'" now?'+(cur?'\n\nIt leaves "'+cur+'". If the switch works, the board is on the other network and this page can no longer reach it: connect this phone/PC to "'+ssid+'" and open http://'+location.hostname.replace(/^\d+\.\d+\.\d+\.\d+$/,'perceptio.local')+'/ (or the new IP shown in the backend). If it fails, the board comes back here by itself.':'')))return;
+  try{await api('/wifi/connect',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ssid})})}catch(e){toast('Connect: '+e.message,true);return}
+  wtMiss=0;alertBox('run','Switching to <b>'+esc(ssid)+'</b>…');clearTimeout(wtTimer);wtTimer=setTimeout(pollTest,1500);$('wtest').scrollIntoView({behavior:'smooth',block:'center'})}
+async function testWifi(){const ssid=$('ssid').value.trim(),pass=$('pass').value;if(!ssid){toast('Enter or pick a network',true);return}
+  let cur='';try{cur=(await api('/wifi/test')).current_ssid}catch(e){}
+  if(cur&&cur!==ssid&&!confirm('To test "'+ssid+'" the board leaves "'+cur+'" for up to ~30 s. This page loses the connection meanwhile and comes back by itself.\n\nContinue?'))return;
+  try{await api('/wifi/test',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ssid,pass})})}catch(e){toast('Test: '+e.message,true);return}
+  $('testbtn').disabled=true;wtMiss=0;alertBox('run','Testing <b>'+esc(ssid)+'</b>…');clearTimeout(wtTimer);wtTimer=setTimeout(pollTest,1500)}
+async function pollTest(){let t;try{t=await api('/wifi/test');wtMiss=0}catch(e){wtMiss++;
+    if(wtMiss<60){alertBox('run','The board is away from this network — waiting for it to come back…');wtTimer=setTimeout(pollTest,1500)}
+    else{alertBox('warn','The board did not come back to this network. If you asked it to switch, it is probably on the new one now.');$('testbtn').disabled=false}return}
+  const nm='<b>'+esc(t.ssid)+'</b>',net=t.internet?'internet OK':'<b>no internet</b> (backend not reachable)';
+  if(t.state==='running'){const st={waiting:'waiting',joining:'connecting',dns:'checking internet',restoring:'going back to the previous network'}[t.step]||t.step;
+    alertBox('run',(t.mode==='connect'?'Switching to ':'Testing ')+nm+' — '+st+'…');wtTimer=setTimeout(pollTest,1000);return}
+  $('testbtn').disabled=false;
+  if(t.mode==='connect'){if(t.state==='ok')alertBox(t.internet?'ok':'warn','Switched to '+nm+' · IP '+t.ip+' · '+t.rssi+' dBm · '+net);
+    else if(t.state==='failed')alertBox('bad','Could not switch to '+nm+': '+esc(t.error)+'. Back on the previous network.');loadWifi();return}
+  if(t.state==='ok'){alertBox(t.internet?'ok':'warn',nm+' works · IP '+t.ip+' · '+t.rssi+' dBm · '+net+(t.saved?'<br>Saved.':'<br><b>Not saved</b>: the list is full (8 networks) — remove one.'));clearForm();loadWifi()}
+  else if(t.state==='failed')alertBox('bad',nm+': '+esc(t.error)+'. Not saved.')}
+nwIcons();
 
 /* ---- live plots over WebSocket ---- */
 const N=2880;const A=[0,1,2].map(()=>new Float32Array(N)),G=[0,1,2].map(()=>new Float32Array(N)),H=[0,1,2].map(()=>new Float32Array(N));

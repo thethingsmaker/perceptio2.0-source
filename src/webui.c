@@ -9,6 +9,7 @@
 #include "upload.h"
 #include "power.h"
 #include "ota.h"
+#include "bus.h"
 #include "net.h"
 #include "esp_ota_ops.h"
 #include "esp_http_server.h"
@@ -167,7 +168,8 @@ static esp_err_t h_status(httpd_req_t *r)
     cJSON_AddNumberToObject(j, "heap_min", st.heap_min);
     cJSON_AddNumberToObject(j, "vbat", st.vbat);
     cJSON_AddBoolToObject  (j, "vbat_cal", st.vbat_cal);
-    cJSON_AddNumberToObject(j, "soc_pct", st.soc_pct);
+    if (st.soc_pct >= 0) cJSON_AddNumberToObject(j, "soc_pct", st.soc_pct); else cJSON_AddNullToObject(j, "soc_pct");
+    cJSON_AddBoolToObject  (j, "battery", st.soc_pct >= 0);           /* false = no cell connected (USB only) */
     cJSON_AddBoolToObject  (j, "vin", st.bq_stat0 & 1);
     cJSON_AddNumberToObject(j, "chg", (st.bq_stat0 >> 5) & 3);
     cJSON_AddNumberToObject(j, "rssi", st.rssi);
@@ -313,6 +315,7 @@ static esp_err_t h_wifi_get(httpd_req_t *r)
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "ssid", l->list[i].ssid);
         cJSON_AddBoolToObject(o, "open", l->list[i].pass[0] == 0);    /* passwords never leave the device */
+        cJSON_AddBoolToObject(o, "connected", net_is_connected() && strcmp(net_ssid(), l->list[i].ssid) == 0);
         cJSON_AddItemToArray(a, o);
     }
     return send_json(r, a, NULL);
@@ -351,6 +354,73 @@ static esp_err_t h_wifi_scan(httpd_req_t *r)            /* GET /api/v1/wifi/scan
     }
     free(ap);
     return send_json(r, a, NULL);
+}
+
+static cJSON *wifi_test_json(void)
+{
+    net_test_t t; net_test_get(&t);
+    static const char *st[] = { "idle", "running", "ok", "failed" };
+    cJSON *j = cJSON_CreateObject();
+    cJSON_AddStringToObject(j, "state", st[t.state <= NT_FAIL ? t.state : 0]);
+    cJSON_AddStringToObject(j, "ssid", t.ssid);
+    if (t.state == NT_RUNNING) cJSON_AddStringToObject(j, "step", t.step);
+    if (t.state == NT_OK) {
+        cJSON_AddStringToObject(j, "ip", t.ip);
+        cJSON_AddNumberToObject(j, "rssi", t.rssi);
+        cJSON_AddBoolToObject(j, "internet", t.internet);
+        cJSON_AddBoolToObject(j, "saved", t.saved);
+    }
+    if (t.state == NT_FAIL) { cJSON_AddStringToObject(j, "error", t.error); cJSON_AddNumberToObject(j, "reason", t.reason); }
+    cJSON_AddStringToObject(j, "mode", t.stay ? "connect" : "test");
+    cJSON_AddStringToObject(j, "current_ssid", net_is_connected() ? net_ssid() : "");
+    return j;
+}
+static esp_err_t h_wifi_test_get(httpd_req_t *r) { return send_json(r, wifi_test_json(), NULL); }
+/* POST /api/v1/wifi/test {ssid, pass}: join it, check DHCP + DNS, save on success, go back (see net.h). */
+static esp_err_t h_wifi_test_post(httpd_req_t *r)
+{
+    if (config_is_locked() || store_is_recording()) return send_err(r, "409 Conflict", "recording in progress");
+    if (upload_active()) return send_err(r, "409 Conflict", "upload in progress");
+    if (ota_busy()) return send_err(r, "409 Conflict", "firmware update in progress");
+    cJSON *b = read_body(r);
+    const cJSON *ssid = b ? cJSON_GetObjectItem(b, "ssid") : NULL;
+    const cJSON *pass = b ? cJSON_GetObjectItem(b, "pass") : NULL;
+    esp_err_t e = cJSON_IsString(ssid) ? net_test_start(ssid->valuestring, cJSON_IsString(pass) ? pass->valuestring : "") : ESP_ERR_INVALID_ARG;
+    cJSON_Delete(b);
+    if (e == ESP_ERR_INVALID_ARG) return send_err(r, "400 Bad Request", "SSID 1-32 chars; password empty (open) or 8-64 chars");
+    if (e == ESP_ERR_INVALID_STATE) return send_err(r, "409 Conflict", "a test is already running");
+    if (e != ESP_OK) return send_err(r, "500 Internal Server Error", esp_err_to_name(e));
+    return send_json(r, wifi_test_json(), "202 Accepted");
+}
+
+/* POST /api/v1/wifi/connect {ssid}: switch to a saved network now (stays there if it works; see net.h). */
+static esp_err_t h_wifi_connect(httpd_req_t *r)
+{
+    if (store_is_recording()) return send_err(r, "409 Conflict", "recording in progress");
+    if (upload_active()) return send_err(r, "409 Conflict", "upload in progress");
+    if (ota_busy()) return send_err(r, "409 Conflict", "firmware update in progress");
+    cJSON *b = read_body(r);
+    const cJSON *ssid = b ? cJSON_GetObjectItem(b, "ssid") : NULL;
+    esp_err_t e = cJSON_IsString(ssid) ? net_switch_start(ssid->valuestring) : ESP_ERR_INVALID_ARG;
+    cJSON_Delete(b);
+    if (e == ESP_ERR_NOT_FOUND) return send_err(r, "404 Not Found", "not a saved network");
+    if (e == ESP_ERR_INVALID_SIZE) return send_err(r, "409 Conflict", "already connected to it");
+    if (e == ESP_ERR_INVALID_STATE) return send_err(r, "409 Conflict", "a test or connection is already running");
+    if (e != ESP_OK) return send_err(r, "400 Bad Request", esp_err_to_name(e));
+    return send_json(r, wifi_test_json(), "202 Accepted");
+}
+/* POST /api/v1/wifi/prefer {ssid}: move it to the top of the list (tried first at boot and on retries). */
+static esp_err_t h_wifi_prefer(httpd_req_t *r)
+{
+    if (config_is_locked()) return send_err(r, "409 Conflict", "recording in progress: settings are locked");
+    cJSON *b = read_body(r);
+    const cJSON *ssid = b ? cJSON_GetObjectItem(b, "ssid") : NULL;
+    esp_err_t e = cJSON_IsString(ssid) ? config_wifi_prefer(ssid->valuestring) : ESP_ERR_INVALID_ARG;
+    cJSON_Delete(b);
+    if (e == ESP_OK) e = config_wifi_save();
+    if (e == ESP_ERR_NOT_FOUND) return send_err(r, "404 Not Found", "not a saved network");
+    if (e != ESP_OK) return send_err(r, "400 Bad Request", esp_err_to_name(e));
+    return h_wifi_get(r);
 }
 
 static esp_err_t h_wifi_delete(httpd_req_t *r)          /* DELETE /api/v1/wifi/<urlencoded ssid> */
@@ -400,6 +470,14 @@ static esp_err_t h_selftest(httpd_req_t *r)
 }
 
 /* ------------------------------------------------------------------ */
+/* Browsers ask for /favicon.ico on their own; answer "no content" (cached for a day) instead of a logged 404. */
+static esp_err_t h_favicon(httpd_req_t *r)
+{
+    httpd_resp_set_status(r, "204 No Content");
+    httpd_resp_set_hdr(r, "Cache-Control", "max-age=86400");
+    return httpd_resp_send(r, NULL, 0);
+}
+
 static esp_err_t h_reboot(httpd_req_t *r)
 {
     cors(r);
@@ -590,7 +668,7 @@ static esp_err_t h_rec_delete(httpd_req_t *r)
     esp_err_t e = store_delete(rid);
     if (e == ESP_ERR_NOT_FOUND)     return send_err(r, "404 Not Found", "unknown recording");
     if (e == ESP_ERR_INVALID_STATE) return send_err(r, "409 Conflict", "recording in progress");
-    cloud_inventory_changed();
+    bus_inventory_changed();
     return h_rec_list(r);
 }
 
@@ -667,13 +745,14 @@ static void ws_sender_task(void *arg)
 /* ------------------------------------------------------------------ */
 esp_err_t webui_start(webui_status_fn fn)
 {
+    if (s_hd) return ESP_OK;                      /* already running (e.g. the fallback AP came up later) */
     s_status_fn = fn;
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.core_id          = 0;                      /* UI core — never core 1 */
     cfg.task_priority    = 5;
     cfg.stack_size       = 8192;
     cfg.max_open_sockets = 7;
-    cfg.max_uri_handlers = 32;
+    cfg.max_uri_handlers = 40;                    /* 31 registered; headroom */
     cfg.lru_purge_enable = true;
     cfg.uri_match_fn     = httpd_uri_match_wildcard;
     cfg.close_fn         = on_close;
@@ -687,6 +766,7 @@ esp_err_t webui_start(webui_status_fn fn)
     const httpd_uri_t uris[] = {
         { .uri = "/",                 .method = HTTP_GET,     .handler = h_root },
         { .uri = "/index.html",       .method = HTTP_GET,     .handler = h_root },
+        { .uri = "/favicon.ico",      .method = HTTP_GET,     .handler = h_favicon },
         { .uri = "/api/v1/info",      .method = HTTP_GET,     .handler = h_info },
         { .uri = "/api/v1/status",    .method = HTTP_GET,     .handler = h_status },
         { .uri = "/api/v1/schema",    .method = HTTP_GET,     .handler = h_schema },
@@ -695,6 +775,10 @@ esp_err_t webui_start(webui_status_fn fn)
         { .uri = "/api/v1/wifi",      .method = HTTP_GET,     .handler = h_wifi_get },
         { .uri = "/api/v1/wifi",      .method = HTTP_POST,    .handler = h_wifi_post },
         { .uri = "/api/v1/wifi/scan", .method = HTTP_GET,     .handler = h_wifi_scan },
+        { .uri = "/api/v1/wifi/test", .method = HTTP_GET,     .handler = h_wifi_test_get },
+        { .uri = "/api/v1/wifi/test", .method = HTTP_POST,    .handler = h_wifi_test_post },
+        { .uri = "/api/v1/wifi/connect", .method = HTTP_POST, .handler = h_wifi_connect },
+        { .uri = "/api/v1/wifi/prefer",  .method = HTTP_POST, .handler = h_wifi_prefer },
         { .uri = "/api/v1/wifi/*",    .method = HTTP_DELETE,  .handler = h_wifi_delete },
         { .uri = "/api/v1/reboot",    .method = HTTP_POST,    .handler = h_reboot },
         { .uri = "/api/v1/power/off", .method = HTTP_POST,    .handler = h_power_off },

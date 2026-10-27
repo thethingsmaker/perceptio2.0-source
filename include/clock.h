@@ -24,6 +24,7 @@ typedef struct {
 esp_err_t clock_init(const char *posix_tz);       /* applies TZ; detects a surviving RTC time */
 void      clock_set_tz(const char *posix_tz);     /* live */
 void      clock_network_up(void);                 /* start/restart SNTP (called on got-IP) */
+void      clock_link(bool up);                    /* net link subscriber: clock_network_up() on up, nothing on down */
 esp_err_t clock_set_epoch(time_t epoch, clock_source_t src);   /* from the app */
 void      clock_get_status(clock_status_t *st);
 const char *clock_source_name(clock_source_t s);
