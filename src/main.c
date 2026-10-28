@@ -26,6 +26,7 @@
 #include "clock.h"
 #include "cloud.h"
 #include "bus.h"
+#include "app.h"
 #include "imu.h"
 #include "w25n01kv.h"
 #include "net.h"
@@ -214,12 +215,7 @@ static void backend_watch(void)                    /* 1 s tick */
 
 static void toggle_recording(const char *by)
 {
-    if (store_is_recording()) { store_stop(by, NULL); return; }
-    esp_err_t e = store_start("", by, NULL);
-    if (e != ESP_OK) {
-        ESP_LOGW(TAG, "start recording (%s): %s", by, e == ESP_ERR_NO_MEM ? "storage full" : esp_err_to_name(e));
-        led_identify(1);                              /* a short white flash: refused */
-    }
+    if (app_rec_toggle(by) != APP_OK) led_identify(1);     /* a short white flash: refused (reason in the APP: line) */
 }
 
 /* ------------------------------------------------------------------ */
@@ -405,8 +401,8 @@ void app_main(void)
         /* session guards: max length (parameter) and storage exhausted by the writer */
         if (store_is_recording()) {
             store_status_t ss; store_get_status(&ss);
-            if (ss.storage_full) store_stop("storage_full", NULL);
-            else if (ss.elapsed_ms >= (uint32_t)g_cfg.session_max_min * 60000u) store_stop("timeout", NULL);
+            if (ss.storage_full) app_rec_stop("storage_full", NULL, NULL);
+            else if (ss.elapsed_ms >= (uint32_t)g_cfg.session_max_min * 60000u) app_rec_stop("timeout", NULL, NULL);
         }
 
         if (tick % 10 == 0) backend_watch();          /* fallback AP when the backend stays unreachable */

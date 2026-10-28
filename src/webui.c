@@ -10,6 +10,7 @@
 #include "power.h"
 #include "ota.h"
 #include "bus.h"
+#include "app.h"
 #include "net.h"
 #include "esp_ota_ops.h"
 #include "esp_http_server.h"
@@ -482,9 +483,7 @@ static esp_err_t h_reboot(httpd_req_t *r)
 {
     cors(r);
     httpd_resp_sendstr(r, "{\"ok\":true}");
-    ota_mark_valid();                             /* a requested restart is not a reason to roll back a fresh image */
-    vTaskDelay(pdMS_TO_TICKS(200));
-    esp_restart();
+    app_reboot("ui");                             /* does not return */
     return ESP_OK;
 }
 
@@ -498,7 +497,7 @@ static esp_err_t h_power_off(httpd_req_t *r)
     snprintf(out, sizeof out, "{\"ok\":true,\"mode\":\"%s\",\"recording_closed\":%s}",
              bq.vin_pgood ? "charge_idle" : "ship", store_is_recording() ? "true" : "false");
     httpd_resp_sendstr(r, out);
-    app_request_power_off("ui");
+    app_power_off("ui");
     return ESP_OK;
 }
 
@@ -597,10 +596,12 @@ static esp_err_t h_rec_start(httpd_req_t *r)         /* POST {"rec_tag": "..."} 
     if (cJSON_IsString(tag)) strncpy(tagbuf, tag->valuestring, sizeof tagbuf - 1);
     cJSON_Delete(b);
     char rid[32] = "";
-    esp_err_t e = store_start(tagbuf, "ui", rid);
-    if (e == ESP_ERR_INVALID_STATE) return send_err(r, "409 Conflict", "already recording");
-    if (e == ESP_ERR_NO_MEM)        return send_err(r, "507 Insufficient Storage", "storage full");
-    if (e != ESP_OK)                return send_err(r, "500 Internal Server Error", esp_err_to_name(e));
+    app_err_t e = app_rec_start(tagbuf, "ui", rid);
+    if (e == APP_BUSY)         return send_err(r, "409 Conflict", "already recording");
+    if (e == APP_STORAGE_FULL) return send_err(r, "507 Insufficient Storage", "storage full");
+    if (e == APP_BATTERY_LOW)  return send_err(r, "409 Conflict", "battery low (< 5 %): connect the charger");
+    if (e == APP_BAD_ARGS)     return send_err(r, "400 Bad Request", "rec_tag: max 64 characters");
+    if (e != APP_OK)           return send_err(r, "500 Internal Server Error", app_reason(e));
     cJSON *j = cJSON_CreateObject(); cJSON_AddStringToObject(j, "rec_id", rid);
     return send_json(r, j, NULL);
 }
@@ -614,10 +615,10 @@ static esp_err_t h_rec_synth(httpd_req_t *r)         /* POST {"minutes": 150, "r
     char tagbuf[65] = "";
     if (cJSON_IsString(tag)) strncpy(tagbuf, tag->valuestring, sizeof tagbuf - 1);
     cJSON_Delete(b);
-    esp_err_t e = store_generate(minutes, tagbuf);
-    if (e == ESP_ERR_INVALID_STATE) return send_err(r, "409 Conflict", "already recording");
-    if (e == ESP_ERR_NO_MEM)        return send_err(r, "507 Insufficient Storage", "storage full");
-    if (e != ESP_OK)                return send_err(r, "500 Internal Server Error", esp_err_to_name(e));
+    app_err_t e = app_rec_generate(minutes, tagbuf, "ui");
+    if (e == APP_BUSY)         return send_err(r, "409 Conflict", "already recording");
+    if (e == APP_STORAGE_FULL) return send_err(r, "507 Insufficient Storage", "storage full");
+    if (e != APP_OK)           return send_err(r, "500 Internal Server Error", app_reason(e));
     cJSON *j = cJSON_CreateObject(); cJSON_AddNumberToObject(j, "minutes", minutes);
     return send_json(r, j, NULL);
 }
@@ -625,8 +626,8 @@ static esp_err_t h_rec_synth(httpd_req_t *r)         /* POST {"minutes": 150, "r
 static esp_err_t h_rec_stop(httpd_req_t *r)
 {
     store_rec_t done;
-    esp_err_t e = store_stop("ui", &done);
-    if (e == ESP_ERR_INVALID_STATE) return send_err(r, "409 Conflict", "not recording");
+    app_err_t e = app_rec_stop("ui", NULL, &done);
+    if (e != APP_OK) return send_err(r, "409 Conflict", "not recording");
     return send_json(r, rec_json(&done), NULL);
 }
 
@@ -665,9 +666,10 @@ static esp_err_t h_rec_data(httpd_req_t *r)          /* the PCR2 file, byte for 
 static esp_err_t h_rec_delete(httpd_req_t *r)
 {
     char rid[32]; rec_id_from_uri(r, rid, sizeof rid);
-    esp_err_t e = store_delete(rid);
-    if (e == ESP_ERR_NOT_FOUND)     return send_err(r, "404 Not Found", "unknown recording");
-    if (e == ESP_ERR_INVALID_STATE) return send_err(r, "409 Conflict", "recording in progress");
+    app_err_t e = app_rec_delete(rid, "ui");
+    if (e == APP_UNKNOWN_RECORDING || e == APP_BAD_ARGS) return send_err(r, "404 Not Found", "unknown recording");
+    if (e == APP_BUSY)              return send_err(r, "409 Conflict", "recording in progress");
+    if (e != APP_OK)                return send_err(r, "500 Internal Server Error", app_reason(e));
     bus_inventory_changed();
     return h_rec_list(r);
 }

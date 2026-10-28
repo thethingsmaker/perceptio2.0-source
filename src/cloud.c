@@ -4,6 +4,7 @@
 #include <inttypes.h>
 #include "cloud.h"
 #include "bus.h"
+#include "app.h"
 #include "cloud_secrets.h"
 #include "config.h"
 #include "board.h"
@@ -405,7 +406,7 @@ static void handle_cmd(const char *payload, int len)
 
     if (strcmp(cmd->valuestring, "identify") == 0) {
         const cJSON *sec = args ? cJSON_GetObjectItem(args, "seconds") : NULL;
-        led_identify(cJSON_IsNumber(sec) ? (uint32_t)sec->valuedouble : 5);
+        app_identify(cJSON_IsNumber(sec) ? (uint32_t)sec->valuedouble : 5, "cloud");
         hist_put(id->valuestring, "applied", NULL); ack(id->valuestring, "applied", NULL, NULL);
     } else if (strcmp(cmd->valuestring, "sync_time") == 0) {
         clock_resync();
@@ -423,10 +424,9 @@ static void handle_cmd(const char *payload, int len)
         if (tag && !cJSON_IsString(tag)) why = "bad_args";
         else if (tag && strlen(tag->valuestring) > 64) why = "bad_args";
         else if (cJSON_IsNumber(rate) && (int)rate->valuedouble != in.odr_hz) why = "bad_args";   /* ODR is a reboot parameter */
-        else if (in.battery_pct >= 0 && in.battery_pct < 5 && !in.plugged) why = "battery_low";
-        else {
-            esp_err_t e = store_start(cJSON_IsString(tag) ? tag->valuestring : "", "cloud", rid);
-            if (e == ESP_ERR_INVALID_STATE) why = "busy"; else if (e == ESP_ERR_NO_MEM) why = "storage_full"; else if (e != ESP_OK) why = "error";
+        else {                                               /* tag length, battery, NAND: decided by the command layer */
+            app_err_t e = app_rec_start(cJSON_IsString(tag) ? tag->valuestring : NULL, "cloud", rid);
+            if (e != APP_OK) why = app_reason(e);
         }
         if (why) { hist_put(id->valuestring, "rejected", why); ack(id->valuestring, "rejected", why, NULL); }
         else {
@@ -435,12 +435,10 @@ static void handle_cmd(const char *payload, int len)
         }
     } else if (strcmp(cmd->valuestring, "stop_recording") == 0) {
         const cJSON *rid = args ? cJSON_GetObjectItem(args, "rec_id") : NULL;
-        store_status_t ss; store_get_status(&ss);
         const char *why = NULL;
-        if (ss.state == REC_IDLE) why = "not_recording";
-        else if (cJSON_IsString(rid) && strcmp(rid->valuestring, ss.cur.rec_id) != 0) why = "bad_args";
         store_rec_t done;
-        if (!why && store_stop("cloud", &done) != ESP_OK) why = "not_recording";
+        app_err_t e = app_rec_stop("cloud", cJSON_IsString(rid) ? rid->valuestring : NULL, &done);
+        if (e != APP_OK) why = app_reason(e);
         if (why) { hist_put(id->valuestring, "rejected", why); ack(id->valuestring, "rejected", why, NULL); }
         else {
             cJSON *r = cJSON_CreateObject();
@@ -465,14 +463,14 @@ static void handle_cmd(const char *payload, int len)
         /* else: `received` was sent above; the terminal ack comes from cloud_upload_done() */
     } else if (strcmp(cmd->valuestring, "delete_recording") == 0) {
         const cJSON *rid = args ? cJSON_GetObjectItem(args, "rec_id") : NULL;
-        esp_err_t e = cJSON_IsString(rid) ? store_delete(rid->valuestring) : ESP_ERR_INVALID_ARG;
-        const char *why = e == ESP_OK ? NULL : e == ESP_ERR_INVALID_STATE ? "busy" : "bad_args";
+        app_err_t e = cJSON_IsString(rid) ? app_rec_delete(rid->valuestring, "cloud") : APP_BAD_ARGS;
+        /* protocol v2 answers an unknown rec_id with "bad_args" (as before the command layer) */
+        const char *why = e == APP_OK ? NULL : e == APP_BUSY ? "busy" : "bad_args";
         if (why) { hist_put(id->valuestring, "rejected", why); ack(id->valuestring, "rejected", why, NULL); }
         else { hist_put(id->valuestring, "applied", NULL); ack(id->valuestring, "applied", NULL, NULL); cloud_inventory_changed(); }
     } else if (strcmp(cmd->valuestring, "reboot") == 0) {
         hist_put(id->valuestring, "applied", NULL); ack(id->valuestring, "applied", NULL, NULL);
-        vTaskDelay(pdMS_TO_TICKS(1000));                     /* let the PUBACK arrive */
-        esp_restart();
+        app_reboot("cloud");                                 /* waits 1 s for the PUBACK; now also confirms a fresh OTA image */
     } else {
         hist_put(id->valuestring, "rejected", "unsupported"); ack(id->valuestring, "rejected", "unsupported", NULL);
     }
