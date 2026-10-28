@@ -385,16 +385,16 @@ esp_err_t ota_install(void) { return kick(2); }
 bool ota_busy(void) { return s_op || (s_st.phase != OTA_IDLE && s_st.phase != OTA_ERROR); }
 void ota_get_status(ota_status_t *st) { portENTER_CRITICAL(&s_mux); *st = s_st; portEXIT_CRITICAL(&s_mux); }
 
-bool ota_pending_verify(void)
-{
-    const esp_partition_t *run = esp_ota_get_running_partition();
-    esp_ota_img_states_t st;
-    return run && esp_ota_get_state_partition(run, &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY;
-}
+/* PENDING_VERIFY is read from otadata ONCE, in ota_init(), and kept in RAM. esp_ota_get_state_partition() maps the
+ * otadata partition (esp_partition_mmap/munmap), which stops the caches of BOTH cores; called 10x/s from the main
+ * loop it caused interrupt-watchdog resets during recordings (2026-10-28, boots 37/38/40, 0.3.19 and earlier). */
+static bool s_pending;
+bool ota_pending_verify(void) { return s_pending; }
 void ota_mark_valid(void)
 {
-    if (!ota_pending_verify()) return;
+    if (!s_pending) return;
     esp_err_t e = esp_ota_mark_app_valid_cancel_rollback();
+    if (e == ESP_OK) s_pending = false;
     ESP_LOGW(TAG, "image %s marked valid (%s)", FW_VERSION_STR, esp_err_to_name(e));
 }
 
@@ -403,7 +403,8 @@ esp_err_t ota_init(void)
     pat_load();
     const esp_partition_t *run = esp_ota_get_running_partition();
     esp_ota_img_states_t st = ESP_OTA_IMG_UNDEFINED;
-    if (run) esp_ota_get_state_partition(run, &st);
+    if (run) esp_ota_get_state_partition(run, &st);  /* the only otadata read of this boot */
+    s_pending = st == ESP_OTA_IMG_PENDING_VERIFY;
     ESP_LOGI(TAG, "running %s (%s), fw %s, repo '%s', token %s",
              run ? run->label : "?", st == ESP_OTA_IMG_PENDING_VERIFY ? "PENDING VERIFY" : st == ESP_OTA_IMG_VALID ? "valid" : "undefined",
              FW_VERSION_STR, g_cfg.ota_repo, s_pat[0] ? "set" : "not set");

@@ -22,7 +22,9 @@ Working style: metric units, English or Italian, no fluff, verify against datash
 ## Firmware rules (apply to everything written for this board)
 
 - **Core split is a hard requirement**: core 0 = WiFi, lwIP, esp_timer, HTTP/UI; core 1 = capture (IMU, impact, NAND writer), GPIO ISR service installed *from core 1*. IMU SPI via `spi_device_polling_transmit` (no SPI ISR). Set in `sdkconfig.defaults` (`ESP_MAIN_TASK_AFFINITY_CPU0`, `ESP_WIFI_TASK_PINNED_TO_CORE_0`, `LWIP_TCPIP_TASK_AFFINITY_CPU0`, `ESP_TIMER_TASK_AFFINITY_CPU0`) and `httpd` `core_id = 0`.
-- **No internal-flash writes during a capture session** (NVS, OTA, coredump) — they stall both cores. Settings changed mid-session go to a CONFIG record on NAND; NVS commit at session stop.
+- **No internal-flash writes during a capture session** (NVS, OTA, coredump) — they stall both cores. The same holds for anything that
+  maps or reads the flash at run time (`esp_ota_get_state_partition`, `esp_partition_read/mmap`, `nvs_get_*`): read such values once at
+  boot and keep them in RAM — a 10 Hz otadata read in the main loop caused interrupt-watchdog resets mid-recording (0.3.20 fix). Settings changed mid-session go to a CONFIG record on NAND; NVS commit at session stop.
 - WiFi modem sleep adds 100–300 ms per HTTP request → `esp_wifi_set_ps(WIFI_PS_NONE)` while the UI is in use (parameter `wifi_ps`).
 - The web page is just a client of `/api/v1` (see `API.md`); the mobile app uses the same API. Parameters are self-describing (`GET /api/v1/schema` from `PARAM_TABLE` in `src/config.c`) — add a parameter = one table line, never hard-code keys in clients.
 - Passwords never leave the device over the API.
