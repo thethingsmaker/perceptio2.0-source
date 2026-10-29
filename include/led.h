@@ -1,5 +1,5 @@
 /* Status LED — one 25 Hz task on core 0. Patterns: breathing, fast blink (4 Hz), solid.
- * The meaning of each colour (README "LED") is decided in main.c led_update(), by priority:
+ * The meaning of each colour (README "LED") is decided in led_policy.c (since 0.3.31), by priority:
  *   identify (white blink) > self-test failed (red blink, 3 s after boot) > recording (red breathing)
  *   > charge fault (yellow blink) > no WiFi / no backend / fallback AP (blue blink)
  *   > charged (yellow solid) > charging (yellow breathing) > all good (green breathing). */

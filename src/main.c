@@ -36,6 +36,9 @@
 #include "ota.h"
 #include "diag.h"
 #include "button.h"
+#include "netwatch.h"
+#include "led_policy.h"
+#include "power_mgr.h"
 #include "rlog.h"
 #include "selftest.h"
 #include "webui.h"
@@ -117,52 +120,23 @@ static void on_cfg_change(const cfg_param_t *p)
     else if (!strcmp(p->key, "log_remote")) rlog_set_level(g_cfg.log_remote);
 }
 
-/* No NTC on the board. The cell stays at ambient (measured: board 45 C while the cell is cold), so the board
- * temperature is used as an AMBIENT proxy with ~+23 K self-heating while charging: pause outside the Li-ion
- * charging window (0..45 C cell), resume with 5 K hysteresis. Thresholds are parameters. */
-static bool charge_gate(float board_c)
-{
-    static bool paused;
-    { bq25180_status_t bq; if (power_charger_status(&bq) == ESP_OK && bq.safety_fault && bq.vin_pgood && !paused) {
-        ESP_LOGW(TAG, "charger safety-timer fault: restarting the charge cycle");
-        bq25180_restart_charge(); } }
-    bool too_hot = board_c > g_cfg.chg_tmax_c, too_cold = board_c < g_cfg.chg_tmin_c;
-    if (!paused && (too_hot || too_cold)) {
-        paused = true; bq25180_charge_enable(false);
-        ESP_LOGW(TAG, "charge PAUSED: board %.1f C outside %ld..%ld C", board_c, (long)g_cfg.chg_tmin_c, (long)g_cfg.chg_tmax_c);
-    } else if (paused && board_c < g_cfg.chg_tmax_c - 5 && board_c > g_cfg.chg_tmin_c + 5) {
-        paused = false; bq25180_charge_enable(true);
-        ESP_LOGW(TAG, "charge resumed: board %.1f C", board_c);
-    }
-    return paused;
-}
-
-#define AP_PASSWORD "perceptio"                   /* fallback AP (no known WiFi). Same on every unit: development only */
-static const char *volatile s_off_request;                 /* set by the UI/cloud; served by the main loop */
-void app_request_power_off(const char *why) { s_off_request = why ? why : "ui"; }
-
-/* ---- status LED: one place decides (priority order in led.h); called every second ---- */
+/* ---- status LED: the decision is led_policy.c; main only gathers its inputs, once a second ---- */
 static int64_t  s_boot_fail_until;               /* esp_timer time until which a failed self-test is shown */
-static bool     s_chg_paused;                    /* charge_gate(): paused by the temperature window */
-static uint32_t s_backend_bad_s;                 /* backend_watch(): seconds the backend has been unreachable */
+static bool     s_chg_paused;                    /* power_mgr_charge_gate(): paused by the temperature window */
 static void led_update(const bq25180_status_t *bq)
 {
-    if (led_get() == LED_IDENTIFY) return;       /* "find me" / refused-start flash runs its own timer */
-    static uint32_t notchg_s;
-    bool bat = power_battery_present(), plugged = bq->vin_pgood;
-    bool charging = bq->chg == BQ_CHG_CC || bq->chg == BQ_CHG_CV, done = bq->chg == BQ_CHG_DONE;
-    notchg_s = (plugged && bat && !charging && !done) ? notchg_s + 1 : 0;     /* cable + cell but no charging */
-    bool chg_fault = plugged && bat && (s_chg_paused || bq->safety_fault || notchg_s >= 10);
-    bool net_bad = net_ap_active() || s_backend_bad_s >= 20;                  /* 20 s grace for a normal (re)connect */
-    led_mode_t m;
-    if (esp_timer_get_time() < s_boot_fail_until) m = LED_BOOT_FAIL;
-    else if (store_is_recording())                m = LED_RECORDING;
-    else if (chg_fault)                           m = LED_CHARGE_FAULT;
-    else if (net_bad)                             m = LED_NET;
-    else if (plugged && bat && done)              m = LED_FULL;
-    else if (plugged && bat && charging)          m = LED_CHARGING;
-    else                                          m = LED_OK;
-    if (m != led_get()) led_set(m);
+    led_inputs_t in = {
+        .boot_fail     = esp_timer_get_time() < s_boot_fail_until,
+        .recording     = store_is_recording(),
+        .plugged       = bq->vin_pgood,
+        .battery       = power_battery_present(),
+        .charging      = bq->chg == BQ_CHG_CC || bq->chg == BQ_CHG_CV,
+        .done          = bq->chg == BQ_CHG_DONE,
+        .safety_fault  = bq->safety_fault,
+        .charge_paused = s_chg_paused,
+        .net_bad       = net_ap_active() || netwatch_backend_bad_s() >= 20,   /* 20 s grace for a normal (re)connect */
+    };
+    led_policy_apply(&in);
 }
 
 /* recording started / stopped (from whichever side did it: UI, cloud, button, timeout) */
@@ -183,34 +157,15 @@ static void on_store_event(bool started, const store_rec_t *r, const char *by)
     bus_inventory_changed();                        /* retained hello: current_rec / recordings[] are part of it */
 }
 
-/* Fallback AP "Perceptio-<device id>": the UI must always be reachable. Started when no saved network joins at boot,
- * and by backend_watch() whenever the backend has been unreachable for AP_AFTER_S (joined a network without internet,
- * DNS dead, router gone...). Switched off again once the backend has been reachable for 30 s and nobody uses the AP. */
-#define AP_AFTER_S   90
-static esp_err_t start_fallback_ap(const char *why)
+/* Fallback AP + backend watch: netwatch.c. "Reachable" = the broker answered: online, or waiting for enrolment approval /
+ * rejected (still a live link); with no cloud configured WiFi is all we can check. */
+static bool backend_ok(void)
 {
-    if (net_ap_active()) return ESP_OK;
-    char ssid[33]; snprintf(ssid, sizeof ssid, "Perceptio-%s", cloud_device_id());
-    ESP_LOGW(TAG, "fallback AP: %s", why);
-    esp_err_t e = net_start_ap(ssid, AP_PASSWORD);
-    if (e == ESP_OK) { net_set_power_save(false); webui_start(status_cb); }   /* webui_start is a no-op when running */
-    return e;
-}
-static void backend_watch(void)                    /* 1 s tick */
-{
-    static uint32_t bad_s, good_s;
     cloud_status_t cs; cloud_get_status(&cs);
-    /* "reachable" = the broker answered: online, or waiting for enrolment approval / rejected (still a live link) */
-    bool ok = cs.state == CLOUD_ONLINE || cs.state == CLOUD_ENROL_WAIT || cs.state == CLOUD_ENROL_REJECTED
-              || (cs.state == CLOUD_OFF && net_is_connected());          /* no cloud configured: WiFi is all we can check */
-    if (ok) { bad_s = 0; good_s++; } else { good_s = 0; bad_s++; }
-    s_backend_bad_s = bad_s;
-    if (!net_ap_active() && bad_s == AP_AFTER_S) {
-        char why[64]; snprintf(why, sizeof why, "backend unreachable for %d s (%s)", AP_AFTER_S, net_is_connected() ? "WiFi up, no internet?" : "no WiFi");
-        start_fallback_ap(why);
-    }
-    if (net_ap_active() && good_s >= 30 && good_s % 30 == 0) net_stop_ap();    /* retried every 30 s while a phone is on it */
+    return cs.state == CLOUD_ONLINE || cs.state == CLOUD_ENROL_WAIT || cs.state == CLOUD_ENROL_REJECTED
+           || (cs.state == CLOUD_OFF && net_is_connected());
 }
+static void ap_up(void) { webui_start(status_cb); }   /* webui_start is a no-op when running */
 
 static void ota_mode_enter(void) { cloud_suspend("fw_update"); }
 
@@ -218,71 +173,19 @@ static void toggle_recording(const char *by)
 {
     if (app_rec_toggle(by) != APP_OK) led_identify(1);     /* a short white flash: refused (reason in the APP: line) */
 }
-static void power_off_now(const char *why);
 static void btn_double(void) { toggle_recording("button"); }
-static void btn_long(void)   { power_off_now("button"); }
+static void btn_long(void)   { power_mgr_off("button"); }
 
-/* ------------------------------------------------------------------ */
-/* Power states.  OFF = BQ ship mode (no SYS power).  CHARGE-IDLE = user switched off but a cable is in:
- * the BQ keeps SYS up, so we run a minimal loop (no WiFi/UI/sampler) showing charge status on the LED.
- * ON = everything running.  "user_off" in NVS carries the user's intent across power cycles.         */
-/* ------------------------------------------------------------------ */
-static void power_off_now(const char *why)
+/* Before OFF / CHARGE-IDLE (power_mgr.c calls this): close a running recording (trailer on the NAND first), tell the
+ * backend it is intentional (<= 1.2 s), and confirm a fresh OTA image (a deliberate power-off is no reason to roll back). */
+static void power_prepare(const char *why)
 {
-    ESP_LOGW(TAG, "switching OFF (%s)", why);
-    if (store_is_recording()) store_stop("power_off", NULL);   /* trailer on the NAND before anything else */
-    cloud_shutdown(why);                          /* tell the backend it is intentional (≤ 1.2 s), before anything else */
-    ota_mark_valid();                             /* a deliberate power-off is not a reason to roll back a fresh image */
-    led_set(LED_OFF);
-    config_user_off_set(true);                    /* allowed: no capture session is running at this point */
-    bq25180_status_t bq; power_charger_status(&bq);
-    vTaskDelay(pdMS_TO_TICKS(100));
-    if (bq.vin_pgood) {
-        esp_restart();                            /* cable in: ship mode cannot engage -> reboot into CHARGE-IDLE */
-    } else {
-        bq25180_enter_ship_mode();                /* on battery: BQ disconnects SYS within ~1 s */
-        vTaskDelay(pdMS_TO_TICKS(6000));
-        ESP_LOGE(TAG, "ship mode did not engage");
-        power_deep_sleep_fallback(60);
-    }
+    if (store_is_recording()) store_stop("power_off", NULL);
+    cloud_shutdown(why);
+    ota_mark_valid();
 }
+static float idle_board_temp(void) { imu_sample_t smp; imu_read_sample(&smp); return 25.0f + smp.v[0] / 256.0f; }   /* sampler not running */
 
-static void charge_idle_loop(void)
-{
-    ESP_LOGW(TAG, "CHARGE-IDLE: device is off, cable in. Hold the button 2 s to turn on.");
-    (void)button_take();                          /* discard a press from before */
-    uint32_t tick = 0;
-    for (;;) {
-        bq25180_status_t bq; power_charger_status(&bq);
-        imu_sample_t smp; imu_read_sample(&smp);
-        float board_c = 25.0f + smp.v[0] / 256.0f;
-        bool paused = charge_gate(board_c);
-
-        if (!bq.vin_pgood) {                      /* cable removed while off -> really off */
-            ESP_LOGW(TAG, "cable removed -> ship mode");
-            led_set(LED_OFF);
-            bq25180_enter_ship_mode();
-            vTaskDelay(pdMS_TO_TICKS(6000));
-            power_deep_sleep_fallback(60);
-        }
-        if (button_take()) {                      /* any press: turn on */
-            ESP_LOGW(TAG, "button -> turning ON");
-            config_user_off_set(false);
-            led_set(LED_OFF);
-            esp_restart();
-        }
-
-        led_set(paused ? LED_CHARGE_FAULT : bq.chg == BQ_CHG_DONE ? LED_FULL : LED_CHARGING);
-
-        if (++tick % 50 == 0)                     /* every 2 s */
-            ESP_LOGI(TAG, "CHARGE-IDLE  VBAT %.2f V  %-18s ILIM %d THERM %d  board %.1f C  STAT1 %02X /INT edges %" PRIu32 "%s",
-                     power_vbat(), bq25180_chg_name(bq.chg), bq.ilim_active, bq.thermreg_active, board_c, bq.stat1, power_int_edges(),
-                     paused ? "  (charge paused)" : "");
-        vTaskDelay(pdMS_TO_TICKS(40));
-    }
-}
-
-/* ------------------------------------------------------------------ */
 void app_main(void)
 {
     rlog_init();                                  /* capture every log line from here on (shipped once the cloud is up) */
@@ -298,6 +201,8 @@ void app_main(void)
     bq25180_set_ichg_ma(g_cfg.ichg_ma);
     bq25180_set_ilim_ma(g_cfg.ilim_ma);
     button_init(btn_double, btn_long);            /* gestures (button.c); actions run in the main loop */
+    netwatch_init(backend_ok, ap_up);             /* fallback AP + backend watch (netwatch.c) */
+    power_mgr_init(power_prepare, idle_board_temp);   /* OFF / CHARGE-IDLE / charge gate (power_mgr.c) */
     lp5810_init();
     lp5810_set_brightness(g_cfg.led_bright);
     led_start();
@@ -313,7 +218,7 @@ void app_main(void)
     {
         bq25180_status_t bq; power_charger_status(&bq);
         if (config_user_off_get()) {
-            if (bq.vin_pgood) charge_idle_loop();     /* never returns */
+            if (bq.vin_pgood) power_mgr_charge_idle();   /* never returns */
             config_user_off_set(false);               /* on battery with the flag set: ship mode didn't happen; run */
         }
     }
@@ -351,11 +256,11 @@ void app_main(void)
     } else {
         /* No known network: own access point "Perceptio-<device id>", same UI at http://192.168.4.1/. The saved
          * networks keep being retried in the background (net.c); joining one switches the AP off. */
-        if (start_fallback_ap("no saved network reachable at boot") == ESP_OK) {
+        if (netwatch_start_ap("no saved network reachable at boot") == ESP_OK) {
             net_set_power_save(false);
             net_start_mdns(g_cfg.dev_name, config_fw_version());
             webui_start(status_cb);
-            ESP_LOGW(TAG, ">>> no WiFi: join 'Perceptio-%s' (password '%s') and open http://%s/ <<<", cloud_device_id(), AP_PASSWORD, net_ip());
+            ESP_LOGW(TAG, ">>> no WiFi: join 'Perceptio-%s' (password '%s') and open http://%s/ <<<", cloud_device_id(), NETWATCH_AP_PASSWORD, net_ip());
         } else {
             ESP_LOGE(TAG, "no WiFi and the fallback AP failed — UI not reachable");
         }
@@ -372,7 +277,7 @@ void app_main(void)
     (void)button_take();                          /* discard presses during boot */
     for (;;) {
         button_tick();                            /* double press -> start/stop recording, hold 3 s -> off (button.c) */
-        if (s_off_request) power_off_now(s_off_request);            /* UI "Power off" */
+        power_mgr_tick();                         /* UI / cloud "Power off" (power_mgr.c) */
 
         /* First boot after an OTA: confirm the image once the cloud is up (or after 90 s without it), never mid-session.
          * Until then a crash/reset rolls back to the previous slot (bootloader rollback). */
@@ -392,7 +297,7 @@ void app_main(void)
             else if (ss.elapsed_ms >= (uint32_t)g_cfg.session_max_min * 60000u) app_rec_stop("timeout", NULL, NULL);
         }
 
-        if (tick % 10 == 0) backend_watch();          /* fallback AP when the backend stays unreachable */
+        if (tick % 10 == 0) netwatch_tick_1s();       /* fallback AP when the backend stays unreachable (netwatch.c) */
         if (tick % 10 == 0) {                         /* battery gauge: 1 s ticks */
             bq25180_status_t b1; power_charger_status(&b1);
             power_battery_tick(b1.vin_pgood, b1.chg == BQ_CHG_CC || b1.chg == BQ_CHG_CV, b1.chg == BQ_CHG_DONE);
@@ -402,7 +307,7 @@ void app_main(void)
             bq25180_status_t bq; power_charger_status(&bq);
             sampler_stats_t st; sampler_get_stats(&st);
             float board_c = 25.0f + st.last.v[0] / 256.0f;
-            s_chg_paused = charge_gate(board_c);
+            s_chg_paused = power_mgr_charge_gate(board_c);
             ESP_LOGI(TAG, "VBAT %.2f V (avg %.3f, %d %%)  VIN %d  %-18s ILIM %d VINDPM %d VDPPM %d THERM %d%s  board %.1f C | IMU %" PRIu32 " Hz, peak %.1f g | heap %u KB",
                      power_vbat(), power_vbat_avg(), power_soc_display(), bq.vin_pgood, bq25180_chg_name(bq.chg), bq.ilim_active, bq.vindpm_active, bq.vdppm_active, bq.thermreg_active,
                      bq.safety_fault ? " SAFETY-TMR" : "", board_c,

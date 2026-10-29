@@ -649,6 +649,10 @@ static void task(void *arg)
             if (s_link_up) client_start();
         }
         if (s_suspended) continue;
+        if (notif & 16) {                                    /* WiFi link came up (cloud_link): fresh client, empty outbox */
+            if (s_link_up) { s_reconnect_due = 0; client_start(); }
+            continue;
+        }
         if (notif & 1) {                                     /* credential changed: reconnect in the right mode */
             if (s_link_up) client_start();
         }
@@ -768,7 +772,11 @@ void cloud_link(bool up)
     s_link_up = up;
     if (up && !was) {
         cloud_event("wifi_back", NULL);
-        if (!s_suspended) client_start();                     /* fresh client (empty outbox) on every link-up */
+        /* The client is (re)created by the cloud task only. Until 0.3.29 this ran client_start() here, in the event-loop
+         * task, while the cloud task could run its own reconnect (s_reconnect_due left over from the disconnect): both
+         * destroyed/created s_cli at once -> InstrFetchProhibited in esp_mqtt_client_destroy (2026-10-29 15:38, board fcc,
+         * rejoining WiFi after the fallback AP). */
+        if (s_task) xTaskNotify(s_task, 16, eSetBits);
     } else if (!up && was) {
         cloud_event("wifi_lost", NULL);
         s_connected = false;

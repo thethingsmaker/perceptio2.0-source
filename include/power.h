@@ -35,6 +35,6 @@ uint32_t  power_int_edges(void);
 void      power_set_button_hook(power_button_fn fn);
 /* Poll path (independent of /INT): consume latched WAKE flags, return 0 / BTN_SHORT / BTN_LONG. */
 power_btn_t power_poll_button(void);
-/* Implemented in main.c: ask the main loop to switch the device off (same path as the 5 s button press: closes a
+/* Implemented in power_mgr.c: ask the main loop to switch the device off (same path as the 5 s button press: closes a
  * running session, tells the backend, then ship mode — or a reboot into CHARGE-IDLE when a cable is in). */
 void      app_request_power_off(const char *why);
