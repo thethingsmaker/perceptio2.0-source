@@ -276,6 +276,10 @@ static void do_install(void)
 {
     char asset[160]; snprintf(asset, sizeof asset, "%s", s_st.asset_url);
     if (!asset[0]) { set_phase(OTA_ERROR, "check first"); return; }
+    /* "downloading" (0 %) BEFORE entering update mode: the UI polls only while a job reports a busy phase, and the
+     * install request is answered ~50 ms after the job starts — entering update mode takes 1-2 s (0.3.21 bug). */
+    s_st.received_bytes = 0;
+    set_phase(OTA_DOWNLOADING, NULL);
     ESP_LOGI(TAG, "install: %u KB internal free, entering update mode", heap_kb());
     if (s_enter) s_enter();
     ESP_LOGI(TAG, "install: %u KB internal free in update mode", heap_kb());
@@ -343,7 +347,12 @@ static void install(const char *asset)
     int64_t t0 = esp_timer_get_time(), last_log = t0;
     size_t hmin = SIZE_MAX;                           /* lowest internal free heap seen during the download */
     for (;;) {
+        int64_t c0 = esp_timer_get_time();
         e = esp_https_ota_perform(h);
+        int64_t call_ms = (esp_timer_get_time() - c0) / 1000;
+        if (call_ms > 2000)                           /* diagnostic: the ~30 s stall after the first ~64 KB (2026-10-29) */
+            ESP_LOGW(TAG, "slow read: %lld ms, now at %d B (%s), %u KB internal free", call_ms,
+                     esp_https_ota_get_image_len_read(h), esp_err_to_name(e), heap_kb());
         size_t hf = heap_caps_get_free_size(MALLOC_CAP_INTERNAL); if (hf < hmin) hmin = hf;
         if (e != ESP_ERR_HTTPS_OTA_IN_PROGRESS) break;
         s_st.received_bytes = esp_https_ota_get_image_len_read(h);
