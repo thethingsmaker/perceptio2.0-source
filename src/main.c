@@ -34,6 +34,7 @@
 #include "store.h"
 #include "upload.h"
 #include "ota.h"
+#include "diag.h"
 #include "rlog.h"
 #include "selftest.h"
 #include "webui.h"
@@ -432,6 +433,7 @@ void app_main(void)
                 else n += snprintf(hex + n, sizeof hex - n, "?? ");
             }
             ESP_LOGI(TAG, "BQ regs 00-0C: %s(STAT0 STAT1 FLAG0 VBAT ICHG CTRL0 CTRL1 IC TMR SHIP SYS TS MASK)", hex);
+            diag_stack_report();                      /* stack headroom of every task (heap-corruption hunt, 0.3.23) */
         }
         tick++;
         vTaskDelay(pdMS_TO_TICKS(100));

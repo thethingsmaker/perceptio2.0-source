@@ -22,6 +22,10 @@
 #include "esp_chip_info.h"
 #include "esp_idf_version.h"
 #include "cJSON.h"
+#include "store.h"
+#include "cloud.h"
+#include "esp_core_dump.h"
+#include "esp_flash.h"
 
 static const char *TAG = "WEBUI";
 static webui_status_fn s_status_fn;
@@ -528,6 +532,36 @@ static cJSON *ota_json(void)
     return j;
 }
 static esp_err_t h_ota_get(httpd_req_t *r) { return send_json(r, ota_json(), NULL); }
+
+/* Crash evidence: the core dump image as a file (decode: esp-coredump info_corefile -t raw -c <file> <firmware.elf>).
+ * Reading/erasing the internal flash stalls both cores, so both are refused while recording. */
+static esp_err_t h_coredump_get(httpd_req_t *r)
+{
+    if (store_is_recording()) return send_err(r, "409 Conflict", "recording in progress");
+    size_t addr = 0, size = 0;
+    if (esp_core_dump_image_check() != ESP_OK || esp_core_dump_image_get(&addr, &size) != ESP_OK || size == 0)
+        return send_err(r, "404 Not Found", "no core dump in flash");
+    char cd[96]; snprintf(cd, sizeof cd, "attachment; filename=\"coredump-%s-%s.bin\"", cloud_device_id(), config_fw_version());
+    httpd_resp_set_type(r, "application/octet-stream");
+    httpd_resp_set_hdr(r, "Content-Disposition", cd);
+    static uint8_t buf[1024];                         /* internal (.bss): one request at a time (httpd is single-threaded) */
+    for (size_t off = 0; off < size; off += sizeof buf) {
+        size_t n = size - off < sizeof buf ? size - off : sizeof buf;
+        if (esp_flash_read(NULL, buf, addr + off, n) != ESP_OK) { httpd_resp_send_chunk(r, NULL, 0); return ESP_FAIL; }
+        if (httpd_resp_send_chunk(r, (const char *)buf, n) != ESP_OK) return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "core dump downloaded (%u B)", (unsigned)size);
+    return httpd_resp_send_chunk(r, NULL, 0);
+}
+static esp_err_t h_coredump_delete(httpd_req_t *r)
+{
+    if (store_is_recording()) return send_err(r, "409 Conflict", "recording in progress");
+    esp_err_t e = esp_core_dump_image_erase();
+    ESP_LOGW(TAG, "core dump erased via API (%s)", esp_err_to_name(e));
+    if (e != ESP_OK) return send_err(r, "500 Internal Server Error", esp_err_to_name(e));
+    cJSON *j = cJSON_CreateObject(); cJSON_AddBoolToObject(j, "erased", true);
+    return send_json(r, j, NULL);
+}
 static esp_err_t ota_kick(httpd_req_t *r, esp_err_t e)
 {
     if (e == ESP_ERR_INVALID_STATE) return send_err(r, "409 Conflict", store_is_recording() ? "recording in progress" : upload_active() ? "upload in progress" : "update already running");
@@ -754,7 +788,7 @@ esp_err_t webui_start(webui_status_fn fn)
     cfg.task_priority    = 5;
     cfg.stack_size       = 8192;
     cfg.max_open_sockets = 7;
-    cfg.max_uri_handlers = 40;                    /* 31 registered; headroom */
+    cfg.max_uri_handlers = 40;                    /* 34 registered; headroom */
     cfg.lru_purge_enable = true;
     cfg.uri_match_fn     = httpd_uri_match_wildcard;
     cfg.close_fn         = on_close;
@@ -785,6 +819,8 @@ esp_err_t webui_start(webui_status_fn fn)
         { .uri = "/api/v1/reboot",    .method = HTTP_POST,    .handler = h_reboot },
         { .uri = "/api/v1/power/off", .method = HTTP_POST,    .handler = h_power_off },
         { .uri = "/api/v1/ota",         .method = HTTP_GET,   .handler = h_ota_get },
+        { .uri = "/api/v1/coredump",    .method = HTTP_GET,    .handler = h_coredump_get },
+        { .uri = "/api/v1/coredump",    .method = HTTP_DELETE, .handler = h_coredump_delete },
         { .uri = "/api/v1/ota/check",   .method = HTTP_POST,  .handler = h_ota_check },
         { .uri = "/api/v1/ota/install", .method = HTTP_POST,  .handler = h_ota_install },
         { .uri = "/api/v1/ota/token",   .method = HTTP_POST,  .handler = h_ota_token },

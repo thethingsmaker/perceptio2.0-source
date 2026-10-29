@@ -14,6 +14,7 @@
 #include "upload.h"
 #include "rlog.h"
 #include "esp_core_dump.h"
+#include "esp_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -682,12 +683,29 @@ static void on_clock_synced(int32_t offset_ms, bool known)
     cloud_event("time_synced", d);
 }
 
-/* A crash leaves a core dump in flash: publish its summary once (task, cause, PC, backtrace) and erase it */
+/* A crash leaves a core dump in flash. Publish its summary ONCE (task, cause, PC, backtrace) and KEEP the dump: it is
+ * the evidence (all task stacks, registers) and is fetched with GET /api/v1/coredump, erased with DELETE (or overwritten
+ * by the next crash). "Once" = the dump's own CRC32 (last 4 bytes of the image) is remembered in NVS "cd_seen".
+ * Until 0.3.22 the dump was erased right after the one-line summary — twice that destroyed the evidence. */
 static void crash_report(void)
 {
     if (esp_core_dump_image_check() != ESP_OK) return;
+    size_t addr = 0, size = 0; uint32_t crc = 0;
+    if (esp_core_dump_image_get(&addr, &size) != ESP_OK || size < 8 || esp_flash_read(NULL, &crc, addr + size - 4, 4) != ESP_OK) {
+        ESP_LOGE(TAG, "core dump in flash but unreadable: kept, fetch it with GET /api/v1/coredump");
+        return;
+    }
+    uint32_t seen = 0; nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) == ESP_OK) { nvs_get_u32(h, "cd_seen", &seen); }
+    else h = 0;
+    if (seen == crc) {
+        ESP_LOGW(TAG, "core dump in flash (%u B, crc %08" PRIx32 ", already reported): GET /api/v1/coredump, DELETE to erase", (unsigned)size, crc);
+        if (h) nvs_close(h);
+        return;
+    }
     esp_core_dump_summary_t *sum = calloc(1, sizeof *sum);
-    if (sum && esp_core_dump_get_summary(sum) == ESP_OK) {
+    esp_err_t se = sum ? esp_core_dump_get_summary(sum) : ESP_ERR_NO_MEM;
+    if (se == ESP_OK) {
         char bt[100] = "";                                   /* ≤ 8 × "0x%08x", fits the 192 B event data with the rest */
         int n = 0;
         for (uint32_t i = 0; i < sum->exc_bt_info.depth && i < 8 && n < (int)sizeof bt - 14; i++)
@@ -698,9 +716,13 @@ static void crash_report(void)
         snprintf(d, sizeof d, "{\"task\":\"%.15s\",\"pc\":\"0x%08" PRIx32 "\",\"cause\":%" PRIu32 ",\"bt\":[%.99s]}",
                  sum->exc_task, sum->exc_pc, sum->ex_info.exc_cause, bt);
         cloud_event("crash", d);
+    } else {
+        ESP_LOGE(TAG, "previous boot CRASHED: core dump summary unreadable (%s)", esp_err_to_name(se));
+        cloud_event("crash", "{\"task\":\"?\"}");
     }
     free(sum);
-    esp_core_dump_image_erase();
+    ESP_LOGW(TAG, "core dump kept in flash (%u B, crc %08" PRIx32 "): GET /api/v1/coredump, DELETE to erase", (unsigned)size, crc);
+    if (h) { nvs_set_u32(h, "cd_seen", crc); nvs_commit(h); nvs_close(h); }
 }
 
 /* ------------------------------------------------------------------ */

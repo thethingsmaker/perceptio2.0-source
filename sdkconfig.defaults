@@ -82,3 +82,10 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
 # Wi-Fi TX/RX block-ack windows as in the IDF iperf example (default 6)
 CONFIG_ESP_WIFI_TX_BA_WIN=32
 CONFIG_ESP_WIFI_RX_BA_WIN=16
+
+# Diagnostics (0.3.23 — heap-corruption hunt, 2026-10-29: the partition list in RAM was overwritten, suspected task stack
+# overrun). Panic the moment a task writes into the last 32 B of its own stack (names the task) instead of silently
+# corrupting the neighbour block; trace facility lets diag.c list every task's stack headroom once a minute.
+# Changing this file: delete sdkconfig.perceptio2 before building (CLAUDE.md).
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
