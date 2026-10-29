@@ -29,6 +29,7 @@ cfg_values_t g_cfg = {
     .ilim_ma = 700,
     .chg_tmax_c      = 70,
     .chg_tmin_c      = 10,
+    .bat_off_mv      = 3300,   /* margin above the BQ25180's 3.0 V BUVLO, which cuts SYS under load and power-cycles a flat board */
     .tz              = "CET-1CEST,M3.5.0,M10.5.0/3",
     .log_serial = true,
     .log_remote = 3,
@@ -58,6 +59,7 @@ static const cfg_param_t PARAM_TABLE[] = {
     P_I("ilim_ma",    "USB input limit",        "Power",   "mA",  ilim_ma,   100, 1100, "100,200,300,400,500,700,1100", false),
     P_I("chg_tmax_c", "Charge pause above",     "Power",   "°C",  chg_tmax_c, 50, 85,   "",                          false),
     P_I("chg_tmin_c", "Charge pause below",     "Power",   "°C",  chg_tmin_c, 0,  25,   "",                          false),
+    P_I("bat_off_mv", "Switch off below",       "Power",   "mV",  bat_off_mv, 3100, 4200, "",                        false),
     P_S("tz",         "Time zone (POSIX)",      "Device",  tz, sizeof g_cfg.tz - 1, false),
     P_B("log_serial", "Serial console log",     "Debug", log_serial, false),
     P_I("log_remote", "Remote log level",       "Debug", "",  log_remote, 0, 3, "0,1,2,3",                           false),

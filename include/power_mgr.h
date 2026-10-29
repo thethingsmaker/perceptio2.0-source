@@ -24,3 +24,11 @@ void power_mgr_off(const char *why);       /* never returns: prepare -> ship mod
 void power_mgr_tick(void);                 /* main loop: serves app_request_power_off() (UI / cloud), any task */
 bool power_mgr_charge_gate(float board_c); /* once per status tick: true = charging paused by temperature */
 void power_mgr_charge_idle(void);          /* never returns: the CHARGE-IDLE loop */
+/* Early at boot: reports how the last power-off ended (ship mode / deep-sleep fallback) and decides for a device the
+ * user had switched off: cable in -> CHARGE-IDLE (never returns); woken by the fallback TIMER with nobody pressing
+ * -> back to sleep (never returns); woken by the button -> clears user_off and returns (turn on). */
+void power_mgr_boot(bool plugged);
+/* Low-battery shutdown (0.3.33), once a second: on battery, when the averaged VBAT stays <= parameter bat_off_mv
+ * (default 3300) for 30 s, switch off exactly like the button (recording closed first, backend told) into ship mode.
+ * Without it a flat board browns out at the BQ's 3.0 V BUVLO, the unloaded cell recovers, it boots, and repeats. */
+void power_mgr_battery_tick(bool plugged);

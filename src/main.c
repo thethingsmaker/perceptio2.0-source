@@ -214,13 +214,11 @@ void app_main(void)
         imu_ok = imu_configure(&ic) == ESP_OK;
     }
 
-    /* user had switched the device off and a cable is in -> charge quietly, don't "turn on" */
+    /* how did the last power-off end, and does a switched-off device stay off? (power_mgr.c: CHARGE-IDLE with the
+     * cable in, back to sleep after a fallback-timer wake, on after a button press) */
     {
         bq25180_status_t bq; power_charger_status(&bq);
-        if (config_user_off_get()) {
-            if (bq.vin_pgood) power_mgr_charge_idle();   /* never returns */
-            config_user_off_set(false);               /* on battery with the flag set: ship mode didn't happen; run */
-        }
+        power_mgr_boot(bq.vin_pgood);
     }
     bool nand_ok = nand_init(40 * 1000 * 1000) == ESP_OK;
     ESP_LOGI(TAG, "heap after drivers: %u KB internal", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
@@ -301,6 +299,7 @@ void app_main(void)
         if (tick % 10 == 0) {                         /* battery gauge: 1 s ticks */
             bq25180_status_t b1; power_charger_status(&b1);
             power_battery_tick(b1.vin_pgood, b1.chg == BQ_CHG_CC || b1.chg == BQ_CHG_CV, b1.chg == BQ_CHG_DONE);
+            power_mgr_battery_tick(b1.vin_pgood);     /* low-battery shutdown (power_mgr.c) */
             led_update(&b1);
         }
         if (tick % 100 == 0) {                        /* status line every 10 s (it is also shipped to the backend log) */
