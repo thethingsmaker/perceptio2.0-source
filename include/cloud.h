@@ -51,6 +51,11 @@ void        cloud_upload_done(const char *cmd_id, bool ok, const char *reason, c
 /* Intentional power-off: retained state {"online":false,"state":"off","reason":...} + "shutdown" event, waits for the
  * PUBACKs (≤ 1.2 s), then disconnects cleanly so the last will does not fire. Returns quickly when offline. */
 void        cloud_shutdown(const char *reason);
+/* Firmware update mode: announce "off" (reason) to the backend, then DESTROY the MQTT client so its internal RAM
+ * (task stack, buffers, TLS session) is free for the download. Runs inside the cloud task; blocks ≤ 12 s. The link
+ * stays down (no reconnect, no WiFi-back restart) until cloud_resume() or the reboot. */
+void        cloud_suspend(const char *reason);
+void        cloud_resume(void);
 void        cloud_event(const char *type, const char *data_json);   /* buffered, replayed; data_json may be NULL */
 void        cloud_get_status(cloud_status_t *st);
 const char *cloud_device_id(void);

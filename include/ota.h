@@ -34,6 +34,11 @@ typedef struct {
 } ota_status_t;
 
 esp_err_t ota_init(void);                                   /* boot: logs the running slot/state */
+/* Update mode. An install needs only WiFi, the web UI (progress) and the OTA task: `enter` runs before the GitHub
+ * lookup to switch off what holds internal RAM (main: the cloud link), `leave` runs when the install FAILED (an
+ * installed image reboots instead). Both optional; called from the OTA task. */
+typedef void (*ota_mode_fn)(void);
+void      ota_set_update_mode(ota_mode_fn enter, ota_mode_fn leave);
 /* Both run asynchronously in the OTA task; ESP_ERR_INVALID_STATE when busy / recording / uploading, ESP_ERR_NOT_FOUND
  * when install is asked before a successful check. Outcome in ota_get_status(). */
 esp_err_t ota_check(void);

@@ -622,11 +622,31 @@ static void client_start(void)
 /* ------------------------------------------------------------------ */
 /* cloud task (core 0): timers + mode switches                         */
 /* ------------------------------------------------------------------ */
+/* update mode (cloud_suspend/resume): done by the cloud task itself, the only task that drives s_cli */
+static volatile bool     s_suspended;
+static const char       *s_susp_reason;
+static SemaphoreHandle_t s_susp_done;
+
 static void task(void *arg)
 {
     for (;;) {
         uint32_t notif = 0;
         xTaskNotifyWait(0, 0xFFFFFFFF, &notif, pdMS_TO_TICKS(1000));
+        if (notif & 4) {                                     /* suspend: announce, then free the client */
+            s_suspended = true;                              /* first: nothing below may recreate it */
+            cloud_shutdown(s_susp_reason ? s_susp_reason : "suspend");   /* ≤ 1.2 s, only if connected */
+            if (s_cli) { esp_mqtt_client_stop(s_cli); esp_mqtt_client_destroy(s_cli); s_cli = NULL; }
+            s_connected = false; s_reconnect_due = 0; s_state = CLOUD_OFF;
+            ESP_LOGW(TAG, "suspended (%s): MQTT client destroyed, %u KB internal free", s_susp_reason ? s_susp_reason : "",
+                     (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
+            if (s_susp_done) xSemaphoreGive(s_susp_done);
+        }
+        if ((notif & 8) && s_suspended) {                    /* resume */
+            s_suspended = false;
+            ESP_LOGW(TAG, "resumed%s", s_link_up ? ": reconnecting" : " (no link yet)");
+            if (s_link_up) client_start();
+        }
+        if (s_suspended) continue;
         if (notif & 1) {                                     /* credential changed: reconnect in the right mode */
             if (s_link_up) client_start();
         }
@@ -705,13 +725,26 @@ esp_err_t cloud_init(cloud_info_fn info)
     return ESP_OK;
 }
 
+void cloud_suspend(const char *reason)
+{
+    if (!s_task) return;
+    if (!s_susp_done) s_susp_done = xSemaphoreCreateBinary();
+    if (!s_susp_done) return;
+    s_susp_reason = reason;
+    xSemaphoreTake(s_susp_done, 0);
+    xTaskNotify(s_task, 4, eSetBits);
+    if (xSemaphoreTake(s_susp_done, pdMS_TO_TICKS(12000)) != pdTRUE)   /* stop waits for an MQTT connect in progress */
+        ESP_LOGW(TAG, "suspend (%s): cloud task did not confirm in 12 s", reason);
+}
+void cloud_resume(void) { if (s_task) xTaskNotify(s_task, 8, eSetBits); }
+
 void cloud_link(bool up)
 {
     bool was = s_link_up;
     s_link_up = up;
     if (up && !was) {
         cloud_event("wifi_back", NULL);
-        client_start();                                       /* fresh client (empty outbox) on every link-up */
+        if (!s_suspended) client_start();                     /* fresh client (empty outbox) on every link-up */
     } else if (!up && was) {
         cloud_event("wifi_lost", NULL);
         s_connected = false;

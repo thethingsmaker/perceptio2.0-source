@@ -144,6 +144,9 @@ static bool heap_ok(void)
     set_phase(OTA_ERROR, m);
     return false;
 }
+static unsigned heap_kb(void) { return (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10); }
+#define OTA_STACK     7168
+static unsigned stack_peak(void) { return OTA_STACK - (unsigned)uxTaskGetStackHighWaterMark(NULL); }   /* bytes (IDF counts bytes) */
 
 /* ------------------------------------------------------------------ */
 /* check                                                               */
@@ -265,10 +268,24 @@ static esp_err_t ota_client_init_cb(esp_http_client_handle_t c)
     return ESP_OK;
 }
 
+static ota_mode_fn s_enter, s_leave;
+void ota_set_update_mode(ota_mode_fn enter, ota_mode_fn leave) { s_enter = enter; s_leave = leave; }
+
+static void install(const char *asset);              /* returns only on failure: an installed image reboots */
 static void do_install(void)
 {
     char asset[160]; snprintf(asset, sizeof asset, "%s", s_st.asset_url);
     if (!asset[0]) { set_phase(OTA_ERROR, "check first"); return; }
+    ESP_LOGI(TAG, "install: %u KB internal free, entering update mode", heap_kb());
+    if (s_enter) s_enter();
+    ESP_LOGI(TAG, "install: %u KB internal free in update mode", heap_kb());
+    install(asset);
+    ESP_LOGW(TAG, "install failed: leaving update mode");
+    if (s_leave) s_leave();
+}
+
+static void install(const char *asset)
+{
     if (!heap_ok()) return;
     set_phase(OTA_DOWNLOADING, NULL);
     s_st.received_bytes = 0;
@@ -306,7 +323,8 @@ static void do_install(void)
         ESP_LOGI(TAG, "redirect to %.*s (URL %u chars)%s", (int)strcspn(host, "/?"), host, (unsigned)ll, ll >= LOC_MAX - 1 ? " TRUNCATED" : "");
         if (ll >= LOC_MAX - 1) { set_phase(OTA_ERROR, "redirect URL too long"); esp_wifi_set_ps(ps_prev); return; }
     }
-    ESP_LOGI(TAG, "downloading %s (%lu B) %s", s_st.asset_name, (unsigned long)s_st.asset_bytes, direct ? "directly" : "from the CDN");
+    ESP_LOGI(TAG, "downloading %s (%lu B) %s — %u KB internal free", s_st.asset_name, (unsigned long)s_st.asset_bytes,
+             direct ? "directly" : "from the CDN", heap_kb());
 
     /* 2. stream it into the other slot */
     esp_http_client_config_t hc = {
@@ -317,23 +335,28 @@ static void do_install(void)
     esp_https_ota_handle_t h = NULL;
     e = esp_https_ota_begin(&oc, &h);
     if (e != ESP_OK) { snprintf(err, sizeof err, "ota begin: %s", esp_err_to_name(e)); set_phase(OTA_ERROR, err); esp_wifi_set_ps(ps_prev); return; }
+    ESP_LOGI(TAG, "session open: %u KB internal free", heap_kb());
 
     esp_app_desc_t desc;
     if (esp_https_ota_get_img_desc(h, &desc) == ESP_OK) ESP_LOGI(TAG, "image: %s %s (%s %s)", desc.project_name, desc.version, desc.date, desc.time);
 
     int64_t t0 = esp_timer_get_time(), last_log = t0;
+    size_t hmin = SIZE_MAX;                           /* lowest internal free heap seen during the download */
     for (;;) {
         e = esp_https_ota_perform(h);
+        size_t hf = heap_caps_get_free_size(MALLOC_CAP_INTERNAL); if (hf < hmin) hmin = hf;
         if (e != ESP_ERR_HTTPS_OTA_IN_PROGRESS) break;
         s_st.received_bytes = esp_https_ota_get_image_len_read(h);
         int64_t now = esp_timer_get_time();
         if (now - last_log > 5 * 1000000) {
             last_log = now;
-            ESP_LOGI(TAG, "%lu / %lu B (%u KB/s)", (unsigned long)s_st.received_bytes, (unsigned long)s_st.asset_bytes,
-                     (unsigned)(s_st.received_bytes / ((now - t0) / 1000 + 1)));
+            ESP_LOGI(TAG, "%lu / %lu B (%u KB/s), heap %u KB (min %u KB)", (unsigned long)s_st.received_bytes, (unsigned long)s_st.asset_bytes,
+                     (unsigned)(s_st.received_bytes / ((now - t0) / 1000 + 1)), (unsigned)(hf >> 10), (unsigned)(hmin >> 10));
         }
     }
     s_st.received_bytes = esp_https_ota_get_image_len_read(h);
+    ESP_LOGI(TAG, "download ended (%s): %lu B in %lld s, heap min %u KB, stack peak %u of %u B", esp_err_to_name(e),
+             (unsigned long)s_st.received_bytes, (esp_timer_get_time() - t0) / 1000000, (unsigned)(hmin >> 10), stack_peak(), OTA_STACK);
     if (e == ESP_OK && !esp_https_ota_is_complete_data_received(h)) { e = ESP_FAIL; snprintf(err, sizeof err, "incomplete download"); }
     else if (e != ESP_OK) snprintf(err, sizeof err, "download: %s", esp_err_to_name(e));
     if (e != ESP_OK) { esp_https_ota_abort(h); set_phase(OTA_ERROR, err); esp_wifi_set_ps(ps_prev); return; }
@@ -362,6 +385,7 @@ static void ota_task(void *arg)
     s_st.last_check_ms = esp_timer_get_time() / 1000;
     if (op == 1) do_check();
     else if (op == 2) do_install();
+    ESP_LOGI(TAG, "%s job done: stack peak %u of %u B, %u KB internal free", op == 1 ? "check" : "install", stack_peak(), OTA_STACK, heap_kb());
     free(s_location); s_location = NULL;
     s_task = NULL; s_op = 0;
     vTaskDelete(NULL);
@@ -373,7 +397,7 @@ static esp_err_t kick(int op)
     if (store_is_recording() || upload_active()) return ESP_ERR_INVALID_STATE;
     if (op == 2 && !s_st.checked) return ESP_ERR_NOT_FOUND;
     s_op = op;
-    if (xTaskCreatePinnedToCore(ota_task, "ota", 7168, (void *)(intptr_t)op, 4, &s_task, 0) != pdPASS) {
+    if (xTaskCreatePinnedToCore(ota_task, "ota", OTA_STACK, (void *)(intptr_t)op, 4, &s_task, 0) != pdPASS) {
         s_op = 0; s_task = NULL;
         set_phase(OTA_ERROR, "no memory for the OTA task");
         return ESP_ERR_NO_MEM;
