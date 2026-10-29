@@ -62,7 +62,7 @@ static int64_t         s_state_since_ms;
 static uint32_t        s_seq;
 static ev_t           *s_ev;                       /* PSRAM ring */
 static uint32_t        s_ev_head, s_ev_count;       /* head = next write; count <= EV_RING */
-static cmd_hist_t      s_hist[CMD_HISTORY]; static int s_hist_n;
+static cmd_hist_t     *s_hist; static int s_hist_n;   /* CMD_HISTORY entries in PSRAM (cloud_init; 3.2 KB, static internal until 0.3.24) */
 static cloud_status_t  s_status;
 static TaskHandle_t    s_task;
 static int64_t         s_reconnect_due;
@@ -370,11 +370,12 @@ static uint32_t ev_pending(void)
 /* ------------------------------------------------------------------ */
 static cmd_hist_t *hist_find(const char *id)
 {
-    for (int i = 0; i < CMD_HISTORY; i++) if (s_hist[i].id[0] && strcmp(s_hist[i].id, id) == 0) return &s_hist[i];
+    for (int i = 0; s_hist && i < CMD_HISTORY; i++) if (s_hist[i].id[0] && strcmp(s_hist[i].id, id) == 0) return &s_hist[i];
     return NULL;
 }
 static void hist_put(const char *id, const char *status, const char *reason)
 {
+    if (!s_hist) return;
     cmd_hist_t *h = &s_hist[s_hist_n++ % CMD_HISTORY];
     memset(h, 0, sizeof *h);
     strncpy(h->id, id, sizeof h->id - 1); strncpy(h->status, status, sizeof h->status - 1);
@@ -737,6 +738,7 @@ esp_err_t cloud_init(cloud_info_fn info)
     load_identity();
     s_ackq = heap_caps_calloc(ACK_Q, sizeof(ack_q_t), MALLOC_CAP_SPIRAM);
     s_ev = heap_caps_calloc(EV_RING, sizeof(ev_t), MALLOC_CAP_SPIRAM);
+    s_hist = heap_caps_calloc(CMD_HISTORY, sizeof *s_hist, MALLOC_CAP_SPIRAM);
     if (!s_ev) s_ev = calloc(EV_RING, sizeof(ev_t));
     s_state_since_ms = clock_utc_ms();
     xTaskCreatePinnedToCore(task, "cloud", 6144, NULL, 4, &s_task, 0);

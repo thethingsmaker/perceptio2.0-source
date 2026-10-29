@@ -23,12 +23,14 @@
 #include "esp_log.h"
 
 static const char *TAG = "SELFTEST";
-static selftest_result_t s_res[40];
+#define RES_MAX 40
+static selftest_result_t *s_res;                       /* RES_MAX entries in PSRAM (3.2 KB; static internal until 0.3.24) */
 static int s_n;
 
 static void record(const char *name, bool pass, const char *fmt, ...)
 {
-    if (s_n >= (int)(sizeof s_res / sizeof s_res[0])) return;
+    if (!s_res) s_res = heap_caps_calloc(RES_MAX, sizeof *s_res, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_res || s_n >= RES_MAX) return;
     selftest_result_t *r = &s_res[s_n++];
     r->name = name; r->pass = pass;
     va_list ap; va_start(ap, fmt); vsnprintf(r->info, sizeof r->info, fmt, ap); va_end(ap);
@@ -158,7 +160,9 @@ static void t_nand(void)
     record("NAND unlock", (ni->sr1 & 0x7C) == 0, "SR1 %02X SR2 %02X", ni->sr1, ni->sr2);
     record("NAND bad-block scan", ni->bad_blocks <= 20, "%d factory bad of %d", ni->bad_blocks, NAND_BLOCKS);
 
-    static uint8_t WORD_ALIGNED_ATTR w[NAND_PAGE_SIZE], r[NAND_PAGE_SIZE];
+    /* test pages in PSRAM for the duration of the test (the NAND driver copies into its own internal DMA buffers) */
+    uint8_t *w = heap_caps_malloc(2 * NAND_PAGE_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT), *r = w ? w + NAND_PAGE_SIZE : NULL;
+    if (!w) { record("NAND page test", false, "no PSRAM for the test pages"); return; }
     /* reserved region only (blocks 0..7, 1020..1023): 8..1019 hold recordings (store.h) */
     uint16_t blk = 1020; while (nand_block_is_bad(blk) && blk < NAND_BLOCKS - 1) blk++;
     uint32_t pg = blk * NAND_PAGES_PER_BLK;
@@ -171,11 +175,13 @@ static void t_nand(void)
     int mism = 0; for (int i = 0; i < NAND_PAGE_SIZE; i++) if (r[i] != w[i]) mism++;
     record("NAND read verify", e == ESP_OK && mism == 0, "%d mismatches, ECC %d", mism, ecc);
     nand_block_erase(blk);
+    free(w);
 }
 
 static void t_nand_stress(void)
 {
-    static uint8_t WORD_ALIGNED_ATTR w[NAND_PAGE_SIZE], r[NAND_PAGE_SIZE];
+    uint8_t *w = heap_caps_malloc(2 * NAND_PAGE_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT), *r = w ? w + NAND_PAGE_SIZE : NULL;
+    if (!w) { record("NAND stress", false, "no PSRAM for the test pages"); return; }
     uint16_t blks[16]; int n = 0;
     for (int b = 0; b < NAND_BLOCKS && n < 16; b++)                 /* reserved blocks only, never the recording area */
         if ((b < 8 || b >= 1020) && !nand_block_is_bad(b)) blks[n++] = b;
@@ -205,6 +211,7 @@ static void t_nand_stress(void)
     record("NAND stress verify", mism == 0 && ecc_max <= 1, "%" PRIu32 " mismatches, ECC max %d, %lld KB/s @%lu MHz",
            mism, ecc_max, (int64_t)pages * NAND_PAGE_SIZE * 1000000 / dt / 1024, (unsigned long)nand_info()->clock_hz / 1000000);
     for (int i = 0; i < n; i++) nand_block_erase(blks[i]);
+    free(w);
 }
 
 /* ------------------------------------------------------------------ */
@@ -242,9 +249,9 @@ void selftest_run(uint32_t g, uint32_t button_wait_s)
     if (g & ST_POWER) t_power(button_wait_s);
     if (g & ST_WIFI)  t_wifi();
     ESP_LOGI(TAG, "==== SELFTEST %d/%d passed ====", selftest_passed(), s_n);
-    for (int i = 0; i < s_n; i++) ESP_LOGI(TAG, "  %-26s %s  %s", s_res[i].name, s_res[i].pass ? "PASS" : "FAIL", s_res[i].info);
+    for (int i = 0; s_res && i < s_n; i++) ESP_LOGI(TAG, "  %-26s %s  %s", s_res[i].name, s_res[i].pass ? "PASS" : "FAIL", s_res[i].info);
 }
 
 int selftest_count(void) { return s_n; }
-const selftest_result_t *selftest_result(int i) { return (i >= 0 && i < s_n) ? &s_res[i] : NULL; }
-int selftest_passed(void) { int p = 0; for (int i = 0; i < s_n; i++) p += s_res[i].pass; return p; }
+const selftest_result_t *selftest_result(int i) { return (s_res && i >= 0 && i < s_n) ? &s_res[i] : NULL; }
+int selftest_passed(void) { int p = 0; for (int i = 0; s_res && i < s_n; i++) p += s_res[i].pass; return p; }

@@ -713,7 +713,10 @@ static esp_err_t h_rec_delete(httpd_req_t *r)
 /* ------------------------------------------------------------------ */
 #define RING_N   4096
 #define WS_MAX   4
-static webui_sample_t s_ring[RING_N];
+/* 4096 x 20 B = 80 KB: in PSRAM (allocated by webui_start). It was a static array until 0.3.24, i.e. 80 KB of the
+ * internal RAM the WiFi/TLS buffers need. PSRAM is safe here: the only writer is the sampler TASK (paused, like every
+ * task, while the flash cache is off) and the only reader is ws_sender (a task). Samples before webui_start are dropped. */
+static webui_sample_t *volatile s_ring;
 static volatile uint32_t s_wr = 0;
 static int s_ws_fd[WS_MAX];
 static volatile int s_stream_ms = 16;
@@ -721,8 +724,10 @@ static volatile int s_stream_ms = 16;
 void webui_feed(const imu_sample_t *smp, int64_t t_us)
 {
     (void)t_us;
+    webui_sample_t *ring = s_ring;
+    if (!ring) return;
     uint32_t w = s_wr;
-    s_ring[w % RING_N] = *smp;
+    ring[w % RING_N] = *smp;
     __atomic_store_n(&s_wr, w + 1, __ATOMIC_RELEASE);
 }
 
@@ -762,12 +767,13 @@ static void ws_sender_task(void *arg)
         bool any = false;
         for (int i = 0; i < WS_MAX; i++) if (s_ws_fd[i] >= 0) any = true;
         uint32_t wr = __atomic_load_n(&s_wr, __ATOMIC_ACQUIRE);
-        if (!any) { rd = wr; continue; }
+        webui_sample_t *ring = s_ring;
+        if (!any || !ring) { rd = wr; continue; }
         if (wr - rd > RING_N) rd = wr - RING_N;
         while (rd != wr) {
             uint32_t n = wr - rd; if (n > 64) n = 64;
             memcpy(frame, &rd, 4);
-            for (uint32_t k = 0; k < n; k++) memcpy(frame + 4 + k * sizeof(webui_sample_t), &s_ring[(rd + k) % RING_N], sizeof(webui_sample_t));
+            for (uint32_t k = 0; k < n; k++) memcpy(frame + 4 + k * sizeof(webui_sample_t), &ring[(rd + k) % RING_N], sizeof(webui_sample_t));
             httpd_ws_frame_t f = { .final = true, .type = HTTPD_WS_TYPE_BINARY, .payload = frame, .len = 4 + n * sizeof(webui_sample_t) };
             for (int i = 0; i < WS_MAX; i++) {
                 if (s_ws_fd[i] < 0) continue;
@@ -783,6 +789,11 @@ esp_err_t webui_start(webui_status_fn fn)
 {
     if (s_hd) return ESP_OK;                      /* already running (e.g. the fallback AP came up later) */
     s_status_fn = fn;
+    if (!s_ring) {
+        webui_sample_t *ring = heap_caps_calloc(RING_N, sizeof *ring, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!ring) ESP_LOGE(TAG, "no PSRAM for the live-stream ring (%u B): Live tab disabled", (unsigned)(RING_N * sizeof *ring));
+        s_ring = ring;
+    }
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.core_id          = 0;                      /* UI core — never core 1 */
     cfg.task_priority    = 5;
