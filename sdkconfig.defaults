@@ -61,7 +61,12 @@ CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC=y
 # the internal heap and the hardware AES driver, which needs an internal DMA bounce buffer per TLS record, fails
 # ("esp-aes: Failed to allocate memory" -> dropped connection). TLS records stay 4 KB for the same reason.
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65534
-CONFIG_LWIP_TCP_WND_DEFAULT=65534
+# Receive window 32 KB (was 64 KB until 0.3.26). Uploads only SEND (they use TCP_SND_BUF above), so this only affects
+# what we download: OTA images, the GitHub API answer, MQTT. A window bigger than the Wi-Fi receive pool (32 dynamic RX
+# buffers, ~47 KB of frames) let GitHub's CDN send more than we could hold while the OTA task was busy erasing/writing
+# the flash: frames were dropped and the sender backed off 1+2+4+8+16(+32) s — the 31 s / 62 s stalls after the first
+# ~48-66 KB of every few OTA downloads (2026-10-29, "slow read: 62008 ms, now at 48422 B").
+CONFIG_LWIP_TCP_WND_DEFAULT=32768
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
