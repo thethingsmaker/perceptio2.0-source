@@ -392,7 +392,16 @@ static void ota_task(void *arg)
 {
     int op = (int)(intptr_t)arg;
     s_st.last_check_ms = esp_timer_get_time() / 1000;
-    if (op == 1) do_check();
+    if (op == 1) {
+        /* the check opens a TLS session to api.github.com too: same update mode as an install (0.3.24 — on 0.3.23 a
+         * check found 19 KB and refused). Busy phase first so the UI keeps polling; a check always leaves again. */
+        set_phase(OTA_CHECKING, NULL);
+        ESP_LOGI(TAG, "check: %u KB internal free, entering update mode", heap_kb());
+        if (s_enter) s_enter();
+        ESP_LOGI(TAG, "check: %u KB internal free in update mode", heap_kb());
+        do_check();
+        if (s_leave) s_leave();
+    }
     else if (op == 2) do_install();
     ESP_LOGI(TAG, "%s job done: stack peak %u of %u B, %u KB internal free", op == 1 ? "check" : "install", stack_peak(), OTA_STACK, heap_kb());
     free(s_location); s_location = NULL;

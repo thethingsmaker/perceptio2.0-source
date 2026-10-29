@@ -89,3 +89,9 @@ CONFIG_ESP_WIFI_RX_BA_WIN=16
 # Changing this file: delete sdkconfig.perceptio2 before building (CLAUDE.md).
 CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
 CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+# 0.3.24: the stack report showed the main task (app_main: self-test, status lines, LED/power logic, OTA validation)
+# with 192 B left of IDF's default 3584 B — the probable cause of the 2026-10-29 11:30 crash (corrupted partition list
+# during ota_mark_valid). Main must stay internal (it writes NVS). The +2.5 KB are paid back by moving the mDNS task
+# stack (4 KB, never touches the flash) to PSRAM.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y
