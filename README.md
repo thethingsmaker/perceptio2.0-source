@@ -115,9 +115,10 @@ No battery connected: no charging states (the charger toggles; see `power_batter
   drop also emits an `upload_retry` event. NAND reads are double-buffered (a reader task fills the next 512 KB chunk
   while the current one is on the wire). Backoff after a drop: 0.5 s doubling while Wi-Fi is up, 2 s doubling when down.
   `upload_init` logs the effective build values (TCP windows, mailbox sizes, TLS allocation and record size).
-- Measured ceiling (2026-10-23, rev 20, RSSI −45..−52): ~530 KB/s, no drops, 19 KB internal heap during the upload; a
-  40 MB codec-1 match in ~75–90 s. The levers and dead ends are in CLAUDE.md ("Memory and upload throughput"). Throughput settings in `sdkconfig.defaults` (64 KB TCP windows, Wi-Fi/lwIP buffers in
-  PSRAM, 16 KB TLS records) per `docs/firmware-upload-speed.md`. The racket never deletes on its own — `delete_recording` does.
+- Measured ceiling (2026-10-23, rev 20, RSSI −45..−52): ~530 KB/s, no drops; a 40 MB codec-1 match in ~75–90 s.
+  Internal heap during an upload: ≥ ~100 KB since 0.3.25 (it was 9–19 KB). The levers and dead ends are in CLAUDE.md
+  ("Memory and upload throughput"). Throughput settings in `sdkconfig.defaults` (64 KB TCP send buffer, 32 KB receive
+  window, Wi-Fi/lwIP buffers in PSRAM, 16 KB TLS records) per `docs/firmware-upload-speed.md`. The racket never deletes on its own — `delete_recording` does.
 
 ## Firmware update (`src/ota.c`) — GitHub Releases
 
@@ -133,7 +134,12 @@ boots `PENDING_VERIFY` (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`); `main` marks i
 after 90 s offline), never during a session; any reset before that rolls back to the previous slot. Deliberate restarts
 (UI Restart, Power off) mark the image valid first. First boot after an update publishes `fw_updated {from, to}`.
 
-Refused while recording or uploading (internal-flash rule). Needs ~30 KB internal heap (idle ≈ 37 KB).
+Refused while recording or uploading (internal-flash rule). **Update mode** (0.3.21+): a check or an install first tells
+the backend `state off (fw_update)` and destroys the MQTT client, so the job runs with ~145 KB internal RAM (0.3.25+);
+a failed job brings the link back (`CLOUD: resumed`), an installed image reboots. The job needs 24 KB internal free
+(`MIN_HEAP`, measured inside the job task). Every step logs the free heap; reads that block > 2 s log `slow read`.
+The pending-verify state is read from otadata once at boot (`ota_pending_verify()` is a RAM flag): reading otadata in the
+main loop stalled both cores 10x/s and caused interrupt-watchdog resets mid-recording until 0.3.20.
 
 Publishing a release: bump `FW_VERSION_STR` in `include/config.h` to match the tag (`v0.3.1` ↔ `0.3.1`), build, attach
 `.pio/build/perceptio2/firmware.bin` to a GitHub Release with that tag. If the tag and `FW_VERSION_STR` differ the UI
@@ -145,7 +151,7 @@ keeps reporting "update available".
   task on `perceptio/2/<id>/log` — **QoS 0, plain text, newline-separated IDF lines (`I (12345) TAG: msg`), ≤ 2 KB per
   message, about once a second when there is something**. Boot lines wait in the ring until the session is up; offline the
   ring keeps the newest ~32 KB (older lines dropped, count in `rlog_dropped()`). A crash loses the lines after the last
-  flush (the coredump partition covers panics).
+  flush (the coredump partition covers panics: the dump is kept until `DELETE /api/v1/coredump`, see API.md).
 - Parameters (group Debug): `log_serial` (USB console on/off — off for the ship build), `log_remote` (0 none, 1 error,
   2 warning, 3 info = default). Passwords are never logged.
 - Backend contract: subscribe `perceptio/2/+/log`, append to a per-racket file, show a tail in the dashboard.

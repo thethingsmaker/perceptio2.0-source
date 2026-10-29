@@ -25,6 +25,26 @@ Working style: metric units, English or Italian, no fluff, verify against datash
 - **No internal-flash writes during a capture session** (NVS, OTA, coredump) — they stall both cores. The same holds for anything that
   maps or reads the flash at run time (`esp_ota_get_state_partition`, `esp_partition_read/mmap`, `nvs_get_*`): read such values once at
   boot and keep them in RAM — a 10 Hz otadata read in the main loop caused interrupt-watchdog resets mid-recording (0.3.20 fix). Settings changed mid-session go to a CONFIG record on NAND; NVS commit at session stop.
+- **Nothing big in internal RAM by accident.** A plain `static` array lands in internal `.bss`. Anything that is not a DMA
+  buffer, not used by an ISR or during flash operations, not a TLS/AES buffer and not the stack of a task that writes the
+  flash is allocated in PSRAM at init (`heap_caps_calloc(..., MALLOC_CAP_SPIRAM)`). Check after adding buffers:
+  `python -m esp_idf_size --archives <build>/*.map` → `libsrc.a` `.bss` (43 KB since 0.3.25; it was 118 KB, 80 KB of it the
+  Live-tab sample ring in `webui.c`).
+- **Main task stack 6144** (`CONFIG_ESP_MAIN_TASK_STACK_SIZE`): `app_main` runs self-test, status, LED/power logic and OTA
+  validation. At IDF's 3584 it had 192 B left; an overrun corrupted the partition list and crashed `ota_mark_valid`
+  (LoadProhibited in `esp_partition_next`, 2026-10-29). The `DIAG:` line (once a minute, idle only) lists the 8 tasks with
+  the least stack left; `CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK` panics on an overrun and names the task.
+- **No kernel-lock work while recording.** The IMU is read from its output registers on each data-ready edge (no FIFO);
+  anything that holds the FreeRTOS kernel lock or masks interrupts on core 1 for > 1 period (1.09 ms) merges two edges and
+  loses a sample — `uxTaskGetSystemState` (the DIAG report, ~2 ms) did exactly that. The store flags intervals > 1.5 periods
+  (`gaps`, `gap_max_us` in END2 and `rec_stopped`, lost-samples flag on the block); `dropped` only counts a full ring.
+- **OTA runs in update mode**: check and install destroy the MQTT client (frees ~29 KB, measured) and announce `state off
+  (fw_update)`; an installed image reboots, a failed one resumes the link. The phase is set busy *before* that, or the UI
+  stops polling.
+- **Crash evidence is kept**: the core dump stays in flash after its one-line report (`cd_seen` = its CRC in NVS) until
+  `DELETE /api/v1/coredump`; download it with `GET /api/v1/coredump` and decode with
+  `esp-coredump info_corefile -t raw -c <file> .pio/build/perceptio2/firmware.elf` (same build!). Log time ≠ sample time:
+  the log clock ran ~0.54 s ahead of esp_timer; `recording … started` prints both.
 - WiFi modem sleep adds 100–300 ms per HTTP request → `esp_wifi_set_ps(WIFI_PS_NONE)` while the UI is in use (parameter `wifi_ps`).
 - The web page is just a client of `/api/v1` (see `API.md`); the mobile app uses the same API. Parameters are self-describing (`GET /api/v1/schema` from `PARAM_TABLE` in `src/config.c`) — add a parameter = one table line, never hard-code keys in clients.
 - Passwords never leave the device over the API.
@@ -59,13 +79,15 @@ reserved (self-test scratch only); every page carries a 16 B header so the inven
 `config_set_locked()` while recording (PATCH /config → 409); NAND reads (download/delete) refused while recording; the
 session is always closed with a trailer before power-off/timeout/storage-full. Capacity ≈ 110 min at 960 Hz.
 
-## Memory and upload throughput (settled 2026-10-23 — do not re-tune without new data)
+## Memory and upload throughput (re-measured 2026-10-29, fw 0.3.27 — do not re-tune without new data)
 
-Internal RAM is the scarce resource (~300 KB; PSRAM 2 MB). Idle ≈ 40 KB free with Wi-Fi + MQTT/TLS + HTTP server + mDNS,
-≈ 19 KB during an HTTPS upload. The boot log prints `heap after drivers / wifi init / wifi join` and the UI line prints
-the heap; `upload` acks carry `stats.heap_min_kb`. Lessons, each paid for:
+Internal RAM free (fw 0.3.27, board fcc): after drivers 250 KB, after Wi-Fi join 158 KB, **idle ≈ 123 KB** with Wi-Fi +
+MQTT/TLS + HTTP server; **≈ 100 KB minimum during an upload** (Live tab open); ≈ 145 KB in OTA update mode, ≈ 114 KB
+during the download. Until 0.3.24 it was 29–35 KB idle and 9–13 KB during uploads: 94 KB of our own static arrays sat in
+internal RAM (see Firmware rules). The boot log prints `heap after drivers / wifi init / wifi join`, the 10 s status line
+prints the heap, `upload` acks carry `stats.heap_min_kb`, OTA progress lines carry `heap … (min …)`. Lessons, each paid for:
 - A TLS session needs ~30 KB when mbedtls allocates internally; the upload opened a second one → `mbedtls_ssl_setup -0x7F00`.
-- `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP` keeps the 64 KB TCP window in PSRAM but Wi-Fi buffers must be DMA-capable, so it adds
+- `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP` keeps the 64 KB TCP send buffer (receive window 32 KB since 0.3.27) in PSRAM but Wi-Fi buffers must be DMA-capable, so it adds
   internal "cache TX buffers" (`ESP_WIFI_CACHE_TX_BUFFER_NUM`, min 16 ≈ 26 KB). Static RX buffers 10, RX BA window ≤ 2×that.
 - Hardware AES on a PSRAM buffer allocates an internal DMA bounce buffer per TLS record: with < ~20 KB free this fails
   (`esp-aes: Failed to allocate memory` → dropped connection). Hence TLS records 4 KB and TLS output buffers internal
@@ -75,6 +97,8 @@ the heap; `upload` acks carry `stats.heap_min_kb`. Lessons, each paid for:
 - Throughput: 106 KB/s (5.7 KB TCP window) → 380 (64 KB window: no gain, CPU-bound) → 500 (CPU 160→240 MHz) → ~530 KB/s
   (TLS buffers internal, BA window 32). ~0.17 s of each 512 KB chunk is the server's processing; 1 MB chunks (backend's
   `chunk_bytes`) are the one lever left. A 40 MB codec-1 match uploads in ~75-90 s. Accepted as the ceiling.
+- OTA downloads stalled 31–62 s (TCP back-off after dropped frames) in 3 of 4 runs with ~20–25 KB free, none with ~115 KB
+  free: on this board, low internal RAM shows up as network stalls before it shows up as allocation errors.
 - `sdkconfig.perceptio2` must be deleted after every `sdkconfig.defaults` change; the `UPLOAD: build:` boot line shows the
   effective values — check it before believing a tuning result.
 - esp-mqtt resends every unacked QoS1 publish on reconnect; with the broker's 20-in-flight limit that becomes an endless
@@ -84,5 +108,6 @@ the heap; `upload` acks carry `stats.heap_min_kb`. Lessons, each paid for:
 
 - Solder battery, verify CC→CV→DONE and on-battery operation (charge monitor prints every 2 s after the tests).
 - ADC calibration; BQ watchdog policy; LED brightness vs Vf.
-- Next blocks: events mirrored to NAND, cloud `configure` command, OTA + secure boot per `PADELIO40_securing_platform_procedure.md`, AP fallback.
+- Next blocks: events mirrored to NAND, cloud `configure` command, secure boot per `PADELIO40_securing_platform_procedure.md` (OTA and the AP fallback are done).
+- Diagnostics added for the 2026-10-29 crash hunt stay until a few days of clean DIAG lines: end-of-stack watchpoint and trace facility (`sdkconfig.defaults`), `src/diag.c`.
 - 800 Hz adequacy ablation once labelled data exists.

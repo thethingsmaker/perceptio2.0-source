@@ -35,6 +35,7 @@
 #include "upload.h"
 #include "ota.h"
 #include "diag.h"
+#include "button.h"
 #include "rlog.h"
 #include "selftest.h"
 #include "webui.h"
@@ -136,10 +137,7 @@ static bool charge_gate(float board_c)
     return paused;
 }
 
-#define DOUBLE_PRESS_US (1500 * 1000)            /* second press (its 0.3 s WAKE1) within 1.5 s of the first */
 #define AP_PASSWORD "perceptio"                   /* fallback AP (no known WiFi). Same on every unit: development only */
-static volatile power_btn_t s_btn_event;
-static void on_button(power_btn_t k) { s_btn_event = k; }
 static const char *volatile s_off_request;                 /* set by the UI/cloud; served by the main loop */
 void app_request_power_off(const char *why) { s_off_request = why ? why : "ui"; }
 
@@ -220,6 +218,9 @@ static void toggle_recording(const char *by)
 {
     if (app_rec_toggle(by) != APP_OK) led_identify(1);     /* a short white flash: refused (reason in the APP: line) */
 }
+static void power_off_now(const char *why);
+static void btn_double(void) { toggle_recording("button"); }
+static void btn_long(void)   { power_off_now("button"); }
 
 /* ------------------------------------------------------------------ */
 /* Power states.  OFF = BQ ship mode (no SYS power).  CHARGE-IDLE = user switched off but a cable is in:
@@ -249,7 +250,7 @@ static void power_off_now(const char *why)
 static void charge_idle_loop(void)
 {
     ESP_LOGW(TAG, "CHARGE-IDLE: device is off, cable in. Hold the button 2 s to turn on.");
-    s_btn_event = 0;
+    (void)button_take();                          /* discard a press from before */
     uint32_t tick = 0;
     for (;;) {
         bq25180_status_t bq; power_charger_status(&bq);
@@ -264,8 +265,7 @@ static void charge_idle_loop(void)
             vTaskDelay(pdMS_TO_TICKS(6000));
             power_deep_sleep_fallback(60);
         }
-        { power_btn_t k = power_poll_button(); if (k) s_btn_event = k; }   /* poll as well as /INT */
-        if (s_btn_event) {                        /* any press: turn on */
+        if (button_take()) {                      /* any press: turn on */
             ESP_LOGW(TAG, "button -> turning ON");
             config_user_off_set(false);
             led_set(LED_OFF);
@@ -297,7 +297,7 @@ void app_main(void)
     power_init();
     bq25180_set_ichg_ma(g_cfg.ichg_ma);
     bq25180_set_ilim_ma(g_cfg.ilim_ma);
-    power_set_button_hook(on_button);
+    button_init(btn_double, btn_long);            /* gestures (button.c); actions run in the main loop */
     lp5810_init();
     lp5810_set_brightness(g_cfg.led_bright);
     led_start();
@@ -369,25 +369,9 @@ void app_main(void)
 
     /* idle (100 ms tick): green heartbeat = healthy, red fast blink = fault; charger line every 2 s; button handling */
     uint32_t tick = 0;
-    s_btn_event = 0;
+    (void)button_take();                          /* discard presses during boot */
     for (;;) {
-        { power_btn_t k = power_poll_button(); if (k) s_btn_event = k; }
-        /* Button = two gestures only (the BQ25180 reports a press after 0.3 s of hold = WAKE1, and 3 s = WAKE2; there is
-         * no release event):  hold 3 s -> power off;  two presses within 1.5 s -> start/stop recording. A single press
-         * does nothing — a long press always begins with a WAKE1, which used to start a recording on the way to off. */
-        {
-            static int64_t first_us;                              /* WAKE1 of a possible double press (0 = none) */
-            int64_t now = esp_timer_get_time();
-            if (s_btn_event == BTN_LONG) { first_us = 0; power_off_now("button"); }   /* closes a running session first */
-            else if (s_btn_event == BTN_SHORT) {
-                if (first_us && now - first_us <= DOUBLE_PRESS_US) {
-                    first_us = 0;
-                    ESP_LOGI(TAG, "button: double press");
-                    toggle_recording("button");
-                } else first_us = now;
-            }
-            if (first_us && now - first_us > DOUBLE_PRESS_US) { first_us = 0; ESP_LOGI(TAG, "button: single press (ignored)"); }
-        }
+        button_tick();                            /* double press -> start/stop recording, hold 3 s -> off (button.c) */
         if (s_off_request) power_off_now(s_off_request);            /* UI "Power off" */
 
         /* First boot after an OTA: confirm the image once the cloud is up (or after 90 s without it), never mid-session.
@@ -400,7 +384,6 @@ void app_main(void)
                 bus_event("fw_updated", d);
             }
         }
-        s_btn_event = 0;
 
         /* session guards: max length (parameter) and storage exhausted by the writer */
         if (store_is_recording()) {

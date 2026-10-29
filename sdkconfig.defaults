@@ -61,11 +61,11 @@ CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC=y
 # the internal heap and the hardware AES driver, which needs an internal DMA bounce buffer per TLS record, fails
 # ("esp-aes: Failed to allocate memory" -> dropped connection). TLS records stay 4 KB for the same reason.
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65534
-# Receive window 32 KB (was 64 KB until 0.3.26). Uploads only SEND (they use TCP_SND_BUF above), so this only affects
-# what we download: OTA images, the GitHub API answer, MQTT. A window bigger than the Wi-Fi receive pool (32 dynamic RX
-# buffers, ~47 KB of frames) let GitHub's CDN send more than we could hold while the OTA task was busy erasing/writing
-# the flash: frames were dropped and the sender backed off 1+2+4+8+16(+32) s — the 31 s / 62 s stalls after the first
-# ~48-66 KB of every few OTA downloads (2026-10-29, "slow read: 62008 ms, now at 48422 B").
+# Receive window 32 KB (64 KB until 0.3.26), kept below the Wi-Fi receive pool (32 dynamic RX buffers, ~47 KB) as IDF
+# advises. Uploads only SEND (TCP_SND_BUF above), so this affects downloads only: OTA images, GitHub API, MQTT.
+# History (2026-10-29): OTA downloads stalled 31 s / 62 s after the first ~48-66 KB (TCP back-off 1+2+4+8+16(+32) s) in
+# 3 of 4 runs with ~20-25 KB internal RAM free; with ~115 KB free (0.3.25+) none stalled, at 64 KB as well as at 32 KB.
+# So low internal RAM was the trigger, not the window; 32 KB stays (no measured cost: 1.35 MB in 10 s).
 CONFIG_LWIP_TCP_WND_DEFAULT=32768
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64

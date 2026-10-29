@@ -62,6 +62,8 @@ Max 8 networks. SSID ≤ 32 bytes, password ≤ 64.
 | `POST /ota/token` | `{"token":"ghp_…"}` stores the GitHub token in NVS (`""` clears). Never returned: `GET /ota` gives `token_hint` ("ghp_…1234") only |
 | `POST /power/off` | `{"ok":true,"mode":"ship"\|"charge_idle","recording_closed":bool}` — same as the 5 s button press: closes a running recording, notifies the backend (`shutdown`), then ship mode; with a cable in, reboots into CHARGE-IDLE (UI off, charging on; 2 s button press turns it back on) |
 | `GET /selftest` | results of the self-test run at boot: `{passed, total, results:[{name, pass, info}]}` |
+| `GET /coredump` | the last crash's core dump image as a file (`coredump-<device_id>-<fw>.bin`); 404 when there is none. Decode: `esp-coredump info_corefile -t raw -c <file> firmware.elf` (the ELF of the build that crashed). 409 while recording (flash read) |
+| `DELETE /coredump` | erases it: `{"erased":true}`. 409 while recording. A new crash overwrites it anyway |
 | `POST /time` | `{"epoch": <seconds since 1970, UTC>}` — the app should call this on every connection when `status.time.valid` is false or `source` is not `ntp` (no backup battery: time is lost in ship mode). Returns `{epoch, local}`. |
 
 ## Recordings (NAND store)
