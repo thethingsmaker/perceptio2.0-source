@@ -170,7 +170,7 @@ static void led_update(const bq25180_status_t *bq)
 /* recording started / stopped (from whichever side did it: UI, cloud, button, timeout) */
 static void on_store_event(bool started, const store_rec_t *r, const char *by)
 {
-    char d[160];
+    char d[192];
     if (started) {
         led_set(LED_RECORDING);                   /* immediate feedback; led_update() keeps it */
         bus_state("recording");
@@ -178,8 +178,8 @@ static void on_store_event(bool started, const store_rec_t *r, const char *by)
         bus_event("rec_started", d);
     } else {
         bus_state("idle");                        /* LED: led_update() picks the next state within 1 s */
-        snprintf(d, sizeof d, "{\"rec_id\":\"%s\",\"by\":\"%s\",\"samples\":%" PRIu32 ",\"bytes\":%" PRIu32 ",\"duration_ms\":%" PRIu32 ",\"dropped\":%" PRIu32 ",\"complete\":%s}",
-                 r->rec_id, by, r->samples, r->bytes, r->duration_ms, r->dropped, r->complete ? "true" : "false");
+        snprintf(d, sizeof d, "{\"rec_id\":\"%s\",\"by\":\"%s\",\"samples\":%" PRIu32 ",\"bytes\":%" PRIu32 ",\"duration_ms\":%" PRIu32 ",\"dropped\":%" PRIu32 ",\"gaps\":%" PRIu32 ",\"complete\":%s}",
+                 r->rec_id, by, r->samples, r->bytes, r->duration_ms, r->dropped, r->gaps, r->complete ? "true" : "false");
         bus_event("rec_stopped", d);
     }
     bus_inventory_changed();                        /* retained hello: current_rec / recordings[] are part of it */
@@ -433,7 +433,10 @@ void app_main(void)
                 else n += snprintf(hex + n, sizeof hex - n, "?? ");
             }
             ESP_LOGI(TAG, "BQ regs 00-0C: %s(STAT0 STAT1 FLAG0 VBAT ICHG CTRL0 CTRL1 IC TMR SHIP SYS TS MASK)", hex);
-            diag_stack_report();                      /* stack headroom of every task (heap-corruption hunt, 0.3.23) */
+            /* stack headroom of every task (0.3.23). NEVER while recording: uxTaskGetSystemState holds the FreeRTOS kernel
+             * lock for ~2 ms while it scans every stack, the IMU data-ready ISR on core 1 waits for it, and one sample is
+             * lost (backend: 3.2 ms gap in d40592485fcc-26-0, at the DIAG line). */
+            if (!store_is_recording()) diag_stack_report();
         }
         tick++;
         vTaskDelay(pdMS_TO_TICKS(100));

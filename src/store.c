@@ -58,6 +58,10 @@ static raw_blk_t *s_ring;                   /* RING_BLOCKS raw blocks, PSRAM */
 static volatile uint32_t s_wr, s_rd;        /* raw block counters (producer / writer) */
 static uint32_t  s_fill;                    /* samples in the raw block being filled */
 static uint32_t  s_samples, s_dropped, s_saturated;
+/* Gaps: an interval > 1.5 sample periods means at least one data-ready edge was merged with the next one (the sampler
+ * reads the IMU output registers, no FIFO), so that sample was never read. Neither the sampler nor `dropped` (ring full)
+ * can see it; the timestamps can. 0.3.26, after the backend found one 3.2 ms gap in d40592485fcc-26-0. */
+static uint32_t  s_gaps, s_gap_max_us, s_gap_thr_us;
 static int64_t   s_first_mono, s_last_mono, s_prev_us;
 static bool      s_lost_pending;
 static volatile uint32_t s_backlog_max;
@@ -251,6 +255,11 @@ void store_feed(const imu_sample_t *s, int64_t t_us)
 static void feed_impl(const imu_sample_t *s, int64_t t_us)
 {
     if (s_wr - __atomic_load_n(&s_rd, __ATOMIC_ACQUIRE) >= RING_BLOCKS) { s_dropped++; s_lost_pending = true; return; }
+    if (s_samples && t_us - s_prev_us > (int64_t)s_gap_thr_us) {
+        uint32_t g = (uint32_t)(t_us - s_prev_us);
+        s_gaps++; if (g > s_gap_max_us) s_gap_max_us = g;
+        s_lost_pending = true;                            /* "samples lost" flag on the block holding the gap */
+    }
     if (s_fill && (t_us - s_prev_us > PCR2_MAX_DT_US || t_us < s_prev_us)) block_close();   /* dt_us is u16: gap -> new block */
     raw_blk_t *rb = ring_blk(s_wr);
     if (s_fill == 0) { rb->first_us = t_us; rb->first_idx = s_samples; }
@@ -271,7 +280,7 @@ static void feed_impl(const imu_sample_t *s, int64_t t_us)
 /* ------------------------------------------------------------------ */
 static void fill_live(store_rec_t *r)
 {
-    r->samples = s_samples; r->dropped = s_dropped; r->saturated = s_saturated; r->blocks = s_blocks;
+    r->samples = s_samples; r->dropped = s_dropped; r->saturated = s_saturated; r->blocks = s_blocks; r->gaps = s_gaps;
     r->pages = s_pg_idx + (s_pg_fill ? 1 : 0);
     r->bytes = s_pg_off + s_pg_fill;
 }
@@ -340,6 +349,8 @@ esp_err_t store_start(const char *rec_tag, const char *by, char rec_id_out[32])
     s_cur = slot; s_wr = s_rd = 0; s_fill = 0; s_blocks = 0;
     s_samples = s_dropped = s_saturated = 0; s_first_mono = s_last_mono = s_prev_us = 0; s_lost_pending = false;
     s_backlog_max = 0; s_full = false; s_wblk = -1; s_wblk_next = -1; s_wpg = 0; s_skip_ord = -1; s_lost_pages = 0;
+    { float hz = measured_rate_hz(); if (hz < 100) hz = (float)imu_get_cfg()->odr_hz;
+      s_gaps = s_gap_max_us = 0; s_gap_thr_us = (uint32_t)(1.5e6f / hz); }
     s_pg_fill = 0; s_pg_idx = 0; s_pg_off = 0; memset(s_pg + STORE_HDR_BYTES, 0xFF, STORE_PAYLOAD);
     mbedtls_sha256_init(&s_sha); mbedtls_sha256_starts(&s_sha, 0); s_sha_done = false;
 
@@ -352,7 +363,10 @@ esp_err_t store_start(const char *rec_tag, const char *by, char rec_id_out[32])
     s_state = REC_RECORDING;
     s_feed_on = true;
     if (rec_id_out) strncpy(rec_id_out, r->rec_id, 32);
-    ESP_LOGI(TAG, "recording %s started (%s) tag '%s', %" PRIu32 " blocks free", r->rec_id, by ? by : "?", r->rec_tag, free_blocks());
+    /* sample clock = esp_timer µs. The log time in brackets has another origin (CPU cycle counter at the first log call
+     * + FreeRTOS ticks) and ran ~0.54 s ahead of it on 2026-10-29: this line prints both to correlate samples and logs */
+    ESP_LOGI(TAG, "recording %s started (%s) tag '%s', %" PRIu32 " blocks free, sample clock %lld ms", r->rec_id, by ? by : "?", r->rec_tag,
+             free_blocks(), (long long)(esp_timer_get_time() / 1000));
     xSemaphoreGive(s_ctl);
     if (s_hook) s_hook(true, r, by);
     return ESP_OK;
@@ -374,9 +388,9 @@ esp_err_t store_stop(const char *by, store_rec_t *out)
     char *j = (char *)rb->data + 8;
     int n = snprintf(j, sizeof rb->data - 8,
         "{\"stop_anchor\":{\"mono_us\":%lld,\"utc_ms\":%lld,\"synced\":%s},\"samples\":%" PRIu32 ",\"blocks\":%" PRIu32
-        ",\"dropped\":%" PRIu32 ",\"saturated\":%" PRIu32 ",\"stopped_by\":\"%s\",\"complete\":true,"
+        ",\"dropped\":%" PRIu32 ",\"saturated\":%" PRIu32 ",\"gaps\":%" PRIu32 ",\"gap_max_us\":%" PRIu32 ",\"stopped_by\":\"%s\",\"complete\":true,"
         "\"first_sample_mono_us\":%lld,\"last_sample_mono_us\":%lld,\"temp_c_stop\":%.1f}",
-        (long long)stop_mono, (long long)stop_utc, stop_utc ? "true" : "false", s_samples, s_blocks + (s_wr - s_rd), s_dropped, s_saturated,
+        (long long)stop_mono, (long long)stop_utc, stop_utc ? "true" : "false", s_samples, s_blocks + (s_wr - s_rd), s_dropped, s_saturated, s_gaps, s_gap_max_us,
         by ? by : "", (long long)s_first_mono, (long long)s_last_mono, board_temp_c());
     memcpy(rb->data, "END2", 4); uint32_t jl = n; memcpy(rb->data + 4, &jl, 4);
     rb->n = 8 + n; rb->kind = 1; rb->flags = 0;
@@ -398,6 +412,9 @@ esp_err_t store_stop(const char *by, store_rec_t *out)
     s_state = REC_IDLE;
     ESP_LOGI(TAG, "recording %s stopped (%s): %" PRIu32 " samples in %" PRIu32 " blocks, %" PRIu32 " bytes, %" PRIu32 " dropped, %" PRIu32 " saturated, backlog max %" PRIu32 ", %" PRIu32 " blocks free",
              r->rec_id, by ? by : "?", r->samples, r->blocks, r->bytes, r->dropped, r->saturated, s_backlog_max, free_blocks());
+    if (s_gaps) ESP_LOGW(TAG, "recording %s: %" PRIu32 " sampling gap(s), longest %" PRIu32 " us (> %" PRIu32 " us = 1.5 periods)",
+                         r->rec_id, s_gaps, s_gap_max_us, s_gap_thr_us);
+    else        ESP_LOGI(TAG, "recording %s: no sampling gaps (threshold %" PRIu32 " us)", r->rec_id, s_gap_thr_us);
     if (out) *out = *r;
     xSemaphoreGive(s_ctl);
     if (s_hook) s_hook(false, r, by);

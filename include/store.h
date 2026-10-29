@@ -79,6 +79,7 @@ typedef struct {
     uint32_t pages;                          /* NAND pages incl. header/end */
     uint32_t bytes;                          /* PCR2 file size */
     uint32_t samples, blocks, dropped, saturated;
+    uint32_t gaps;                           /* sample intervals > 1.5 periods: >= 1 sample never read (this session only) */
     uint32_t duration_ms;
     int      odr_hz;
     bool     complete;                       /* END2 present */
