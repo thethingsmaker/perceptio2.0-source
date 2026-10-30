@@ -42,12 +42,32 @@ void      ota_set_update_mode(ota_mode_fn enter, ota_mode_fn leave);
 /* Both run asynchronously in the OTA task; ESP_ERR_INVALID_STATE when busy / recording / uploading, ESP_ERR_NOT_FOUND
  * when install is asked before a successful check. Outcome in ota_get_status(). */
 esp_err_t ota_check(void);
-esp_err_t ota_install(void);
+esp_err_t ota_install(void);               /* also ESP_ERR_NOT_ALLOWED: on battery below OTA_MIN_SOC_PCT */
+
+/* Battery floor for any install, local or remote (0.3.37): on battery below 20 % an install is refused; with the cable
+ * in, or with no battery detected, it is always allowed. A failed install cannot brick the board (it writes the other
+ * slot), the floor only avoids dying half-way. */
+#define OTA_MIN_SOC_PCT 20
+
+/* Remote update (backend command fw_update, 0.3.37). version NULL or "" = latest release, else that tag ("0.3.36" or
+ * "v0.3.36"); force = install even if not newer. Returns at once: ESP_ERR_INVALID_ARG (malformed version),
+ * ESP_ERR_INVALID_STATE (recording/stopping/uploading/OTA busy), ESP_ERR_NOT_ALLOWED (battery floor), ESP_OK = job
+ * started. The job looks the release up WITH THE CLOUD LINK UP and reports through `answer` (called once, from the
+ * OTA task: it must only queue). After OTA_R_UPDATING it enters update mode and installs; a failure after that is
+ * announced as an `error` event {code:"ota_failed"} (download/verify: right away, once the link is back; a boot that
+ * rolled back: by the old image at its next boot). */
+typedef enum { OTA_R_UPDATING, OTA_R_NOT_NEWER, OTA_R_BAD_VERSION, OTA_R_ERROR } ota_remote_t;
+typedef void (*ota_answer_fn)(const char *cmd_id, ota_remote_t outcome, const char *running, const char *target,
+                              uint32_t bytes, const char *msg);
+esp_err_t ota_remote_update(const char *cmd_id, const char *version, bool force, ota_answer_fn answer);
 void      ota_get_status(ota_status_t *st);
 bool      ota_busy(void);
 /* Rollback handling: true if this image booted as PENDING_VERIFY (first boot after an update). */
 bool      ota_pending_verify(void);
 void      ota_mark_valid(void);                             /* called by main once the device proved healthy */
+/* Boot outcome of the last install (0.3.37): before rebooting into a new image the job stores "from>to" in NVS
+ * ("ota_tgt"). ota_init: running == from -> the new image did not survive (rollback) -> error event ota_failed;
+ * running == to -> cleared once this image is marked valid; anything else (flashed by USB meanwhile) -> cleared. */
 /* PAT storage (NVS "ota_pat"): set "" to clear. Never returned in clear: ota_pat_hint gives "ghp_…1234" or "". */
 esp_err_t ota_pat_set(const char *pat);
 bool      ota_pat_is_set(void);

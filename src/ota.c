@@ -10,6 +10,7 @@
 #include "store.h"
 #include "upload.h"
 #include "bus.h"
+#include "power.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_http_client.h"
@@ -29,6 +30,7 @@ static const char *TAG = "OTA";
 
 #define NS_CFG        "cfg"                       /* same namespace as config.c */
 #define KEY_PAT       "ota_pat"
+#define KEY_TGT       "ota_tgt"                   /* "from>to" while an installed image has not proved itself (0.3.37) */
 #define PAT_MAX       120                         /* classic ghp_ = 40, fine-grained github_pat_ = 93 */
 #define JSON_MAX      (24 * 1024)                 /* releases/latest answer (PSRAM) */
 #define MIN_HEAP      (24 * 1024)                 /* internal RAM needed, measured inside the job task (its 7 KB stack already taken):
@@ -38,7 +40,8 @@ static const char *TAG = "OTA";
 static ota_status_t s_st;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static TaskHandle_t s_task;
-static int s_op;                                  /* 1 check, 2 install */
+static int s_op;                                  /* 1 check, 2 install, 3 remote update */
+static struct { char id[24]; char tag[24]; bool force; ota_answer_fn answer; } s_rq;   /* op 3 request */
 static char s_pat[PAT_MAX + 1];
 #define LOC_MAX 2048
 static char *s_location;                          /* redirect target (signed CDN URL, ~1 KB): PSRAM, only during an install */
@@ -145,6 +148,26 @@ static bool heap_ok(void)
     return false;
 }
 static unsigned heap_kb(void) { return (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10); }
+/* OTA_MIN_SOC_PCT (ota.h): on battery below the floor -> refuse; cable in or no battery (soc -1) -> allowed */
+static bool battery_too_low(void)
+{
+    bq25180_status_t bq;
+    bool plugged = power_charger_status(&bq) == ESP_OK && bq.vin_pgood;
+    int pct = power_soc_display();
+    return !plugged && pct >= 0 && pct < OTA_MIN_SOC_PCT;
+}
+
+/* "error" event {code:"ota_failed", msg, version} (protocol: Remote firmware update) */
+static void ota_failed_event(const char *msg, const char *version)
+{
+    cJSON *j = cJSON_CreateObject();
+    cJSON_AddStringToObject(j, "code", "ota_failed");
+    cJSON_AddStringToObject(j, "msg", msg ? msg : "");
+    cJSON_AddStringToObject(j, "version", version ? version : "");
+    char *t = cJSON_PrintUnformatted(j); cJSON_Delete(j);
+    if (t) { bus_event("error", t); free(t); }
+}
+
 #define OTA_STACK     7168
 static unsigned stack_peak(void) { return OTA_STACK - (unsigned)uxTaskGetStackHighWaterMark(NULL); }   /* bytes (IDF counts bytes) */
 
@@ -169,29 +192,32 @@ static int repo_status(const char *slug)
     return status;
 }
 
-static void do_check(void)
+/* tag NULL = releases/latest, else releases/tags/<tag>. Returns 0 found, 404 = that tag has no release (repo
+ * visible), -1 any other error (reason in s_st.error, phase OTA_ERROR). */
+static int do_check(const char *tag_wanted)
 {
     char slug[80], url[160];
-    if (!repo_slug(slug, sizeof slug)) { set_phase(OTA_ERROR, "ota_repo must be owner/repo"); return; }
-    if (!heap_ok()) return;
-    snprintf(url, sizeof url, "https://api.github.com/repos/%s/releases/latest", slug);
+    if (!repo_slug(slug, sizeof slug)) { set_phase(OTA_ERROR, "ota_repo must be owner/repo"); return -1; }
+    if (!heap_ok()) return -1;
+    if (tag_wanted) snprintf(url, sizeof url, "https://api.github.com/repos/%s/releases/tags/%s", slug, tag_wanted);
+    else            snprintf(url, sizeof url, "https://api.github.com/repos/%s/releases/latest", slug);
     set_phase(OTA_CHECKING, NULL);
     ESP_LOGI(TAG, "checking %s", url);
 
     char *body = heap_caps_malloc(JSON_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!body) { set_phase(OTA_ERROR, "no PSRAM for the answer"); return; }
+    if (!body) { set_phase(OTA_ERROR, "no PSRAM for the answer"); return -1; }
     esp_http_client_config_t cfg = {
         .url = url, .crt_bundle_attach = esp_crt_bundle_attach, .timeout_ms = 20000,
         .buffer_size = 2048, .buffer_size_tx = 1024, .user_agent = UA,
     };
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
-    if (!c) { free(body); set_phase(OTA_ERROR, "http client init"); return; }
+    if (!c) { free(body); set_phase(OTA_ERROR, "http client init"); return -1; }
     add_auth(c);
     esp_http_client_set_header(c, "Accept", "application/vnd.github+json");
     esp_http_client_set_header(c, "X-GitHub-Api-Version", "2022-11-28");
 
     char err[64] = "";
-    int n = 0, status = 0;
+    int n = 0, status = 0, rc = 0;
     esp_err_t e = esp_http_client_open(c, 0);
     if (e != ESP_OK) snprintf(err, sizeof err, "connect: %s", esp_err_to_name(e));
     else {
@@ -211,7 +237,8 @@ static void do_check(void)
         if (status == 401) snprintf(err, sizeof err, "GitHub 401: token missing or wrong");
         else if (status == 404) {                 /* GitHub answers 404 both for "no release" and for "no access": tell them apart */
             int rs = repo_status(slug);
-            if (rs == 200) snprintf(err, sizeof err, "repo OK, but no published release (drafts/pre-releases ignored)");
+            if (rs == 200 && tag_wanted) { snprintf(err, sizeof err, "no release tagged %s", tag_wanted); rc = 404; }
+            else if (rs == 200) snprintf(err, sizeof err, "repo OK, but no published release (drafts/pre-releases ignored)");
             else if (rs == 404) snprintf(err, sizeof err, s_pat[0] ? "repo not visible with this token" : "repo not found (private? set a token)");
             else snprintf(err, sizeof err, "GitHub 404 on releases; repo check HTTP %d", rs);
         }
@@ -255,6 +282,7 @@ static void do_check(void)
     }
     free(body);
     set_phase(err[0] ? OTA_ERROR : OTA_IDLE, err[0] ? err : NULL);
+    return err[0] ? (rc ? rc : -1) : 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -280,11 +308,14 @@ static void do_install(void)
      * install request is answered ~50 ms after the job starts — entering update mode takes 1-2 s (0.3.21 bug). */
     s_st.received_bytes = 0;
     set_phase(OTA_DOWNLOADING, NULL);
+    bus_state("updating");                            /* published before update mode switches the link off */
     ESP_LOGI(TAG, "install: %u KB internal free, entering update mode", heap_kb());
     if (s_enter) s_enter();
     ESP_LOGI(TAG, "install: %u KB internal free in update mode", heap_kb());
     install(asset);
     ESP_LOGW(TAG, "install failed: leaving update mode");
+    bus_state("idle");                                /* kick() refuses during a recording/upload: idle is right */
+    ota_failed_event(s_st.error, s_st.latest_tag);    /* queued; replayed after the next hello */
     if (s_leave) s_leave();
 }
 
@@ -378,6 +409,12 @@ static void install(const char *asset)
         set_phase(OTA_ERROR, err); esp_wifi_set_ps(ps_prev); return;
     }
     ESP_LOGW(TAG, "installed %s (%lu B in %lld s): rebooting", s_st.latest_tag, (unsigned long)s_st.received_bytes, (esp_timer_get_time() - t0) / 1000000);
+    {   /* boot outcome breadcrumb (ota.h): the next boot tells success from rollback */
+        const char *to = s_st.latest_tag[0] == 'v' ? s_st.latest_tag + 1 : s_st.latest_tag;
+        char tgt[64]; snprintf(tgt, sizeof tgt, "%s>%.31s", FW_VERSION_STR, to);
+        nvs_handle_t nh;
+        if (nvs_open(NS_CFG, NVS_READWRITE, &nh) == ESP_OK) { nvs_set_str(nh, KEY_TGT, tgt); nvs_commit(nh); nvs_close(nh); }
+    }
     set_phase(OTA_REBOOTING, NULL);
     char d[96]; snprintf(d, sizeof d, "{\"from\":\"%s\",\"to\":\"%s\",\"bytes\":%lu}", FW_VERSION_STR, s_st.latest_tag, (unsigned long)s_st.received_bytes);
     bus_event("fw_update_installed", d);
@@ -399,11 +436,32 @@ static void ota_task(void *arg)
         ESP_LOGI(TAG, "check: %u KB internal free, entering update mode", heap_kb());
         if (s_enter) s_enter();
         ESP_LOGI(TAG, "check: %u KB internal free in update mode", heap_kb());
-        do_check();
+        do_check(NULL);
         if (s_leave) s_leave();
     }
     else if (op == 2) do_install();
-    ESP_LOGI(TAG, "%s job done: stack peak %u of %u B, %u KB internal free", op == 1 ? "check" : "install", stack_peak(), OTA_STACK, heap_kb());
+    else if (op == 3) {
+        /* remote update: the lookup runs with the cloud link UP, so the answer (applied / updated:false / bad_args)
+         * goes out on it; update mode only starts for the install itself (~80 KB internal free with MQTT up, 0.3.36). */
+        set_phase(OTA_CHECKING, NULL);
+        ESP_LOGI(TAG, "remote update (cmd %s): %s%s, force %s, %u KB internal free", s_rq.id, s_rq.tag[0] ? "release " : "latest release",
+                 s_rq.tag, s_rq.force ? "yes" : "no", heap_kb());
+        int rc = do_check(s_rq.tag[0] ? s_rq.tag : NULL);
+        ota_status_t st; ota_get_status(&st);
+        if (rc == 404)     s_rq.answer(s_rq.id, OTA_R_BAD_VERSION, FW_VERSION_STR, s_rq.tag, 0, st.error);
+        else if (rc != 0)  s_rq.answer(s_rq.id, OTA_R_ERROR, FW_VERSION_STR, s_rq.tag, 0, st.error);
+        else if (!s_rq.force && ver_cmp(st.latest_tag, FW_VERSION_STR) <= 0) {
+            ESP_LOGI(TAG, "remote update: %s is not newer than %s, nothing to do", st.latest_tag, FW_VERSION_STR);
+            s_rq.answer(s_rq.id, OTA_R_NOT_NEWER, FW_VERSION_STR, st.latest_tag, 0, NULL);
+        } else {
+            const char *to = st.latest_tag[0] == 'v' ? st.latest_tag + 1 : st.latest_tag;
+            ESP_LOGW(TAG, "remote update: %s -> %s (%lu B)", FW_VERSION_STR, to, (unsigned long)st.asset_bytes);
+            bus_state("updating");                    /* before the applied ack: same order as the protocol */
+            s_rq.answer(s_rq.id, OTA_R_UPDATING, FW_VERSION_STR, to, st.asset_bytes, NULL);
+            do_install();                             /* returns only on failure (event ota_failed sent by it) */
+        }
+    }
+    ESP_LOGI(TAG, "%s job done: stack peak %u of %u B, %u KB internal free", op == 1 ? "check" : op == 2 ? "install" : "remote update", stack_peak(), OTA_STACK, heap_kb());
     free(s_location); s_location = NULL;
     s_task = NULL; s_op = 0;
     vTaskDelete(NULL);
@@ -414,6 +472,10 @@ static esp_err_t kick(int op)
     if (s_op || s_task || (s_st.phase != OTA_IDLE && s_st.phase != OTA_ERROR)) return ESP_ERR_INVALID_STATE;
     if (store_is_recording() || upload_active()) return ESP_ERR_INVALID_STATE;
     if (op == 2 && !s_st.checked) return ESP_ERR_NOT_FOUND;
+    if (op != 1 && battery_too_low()) {
+        ESP_LOGW(TAG, "%s refused: battery %d %% < %d %% and no cable", op == 2 ? "install" : "remote update", power_soc_display(), OTA_MIN_SOC_PCT);
+        return ESP_ERR_NOT_ALLOWED;
+    }
     s_op = op;
     if (xTaskCreatePinnedToCore(ota_task, "ota", OTA_STACK, (void *)(intptr_t)op, 4, &s_task, 0) != pdPASS) {
         s_op = 0; s_task = NULL;
@@ -424,6 +486,24 @@ static esp_err_t kick(int op)
 }
 esp_err_t ota_check(void)   { return kick(1); }
 esp_err_t ota_install(void) { return kick(2); }
+
+esp_err_t ota_remote_update(const char *cmd_id, const char *version, bool force, ota_answer_fn answer)
+{
+    if (!cmd_id || !answer) return ESP_ERR_INVALID_ARG;
+    char tag[24] = "";
+    if (version && *version) {                        /* "0.3.36" / "v0.3.36" -> "v0.3.36" (our release tags) */
+        const char *v = (*version == 'v' || *version == 'V') ? version + 1 : version;
+        size_t l = strlen(v);
+        if (l == 0 || l > 16) return ESP_ERR_INVALID_ARG;
+        for (const char *c = v; *c; c++) if (!isdigit((unsigned char)*c) && *c != '.') return ESP_ERR_INVALID_ARG;
+        snprintf(tag, sizeof tag, "v%s", v);
+    }
+    if (s_op || s_task || (s_st.phase != OTA_IDLE && s_st.phase != OTA_ERROR)) return ESP_ERR_INVALID_STATE;
+    snprintf(s_rq.id, sizeof s_rq.id, "%s", cmd_id);
+    snprintf(s_rq.tag, sizeof s_rq.tag, "%s", tag);
+    s_rq.force = force; s_rq.answer = answer;
+    return kick(3);
+}
 bool ota_busy(void) { return s_op || (s_st.phase != OTA_IDLE && s_st.phase != OTA_ERROR); }
 void ota_get_status(ota_status_t *st) { portENTER_CRITICAL(&s_mux); *st = s_st; portEXIT_CRITICAL(&s_mux); }
 
@@ -431,6 +511,7 @@ void ota_get_status(ota_status_t *st) { portENTER_CRITICAL(&s_mux); *st = s_st; 
  * otadata partition (esp_partition_mmap/munmap), which stops the caches of BOTH cores; called 10x/s from the main
  * loop it caused interrupt-watchdog resets during recordings (2026-10-28, boots 37/38/40, 0.3.19 and earlier). */
 static bool s_pending;
+static bool s_tgt_keep;                               /* the ota_tgt breadcrumb names this image: erase once it is valid */
 bool ota_pending_verify(void) { return s_pending; }
 void ota_mark_valid(void)
 {
@@ -438,6 +519,31 @@ void ota_mark_valid(void)
     esp_err_t e = esp_ota_mark_app_valid_cancel_rollback();
     if (e == ESP_OK) s_pending = false;
     ESP_LOGW(TAG, "image %s marked valid (%s)", FW_VERSION_STR, esp_err_to_name(e));
+    if (e == ESP_OK && s_tgt_keep) {                  /* this image proved itself: the breadcrumb has served */
+        nvs_handle_t h; if (nvs_open(NS_CFG, NVS_READWRITE, &h) == ESP_OK) { nvs_erase_key(h, KEY_TGT); nvs_commit(h); nvs_close(h); }
+        s_tgt_keep = false;
+    }
+}
+
+/* boot: read the "from>to" breadcrumb left by the last install (ota.h) */
+static void tgt_boot_check(void)
+{
+    nvs_handle_t h; char tgt[64]; size_t len = sizeof tgt;
+    if (nvs_open(NS_CFG, NVS_READWRITE, &h) != ESP_OK) return;
+    if (nvs_get_str(h, KEY_TGT, tgt, &len) != ESP_OK) { nvs_close(h); return; }
+    char *gt = strchr(tgt, '>');
+    const char *from = tgt, *to = gt ? gt + 1 : "";
+    if (gt) *gt = 0;
+    bool erase = true;
+    if (*to && ver_cmp(to, FW_VERSION_STR) == 0) {
+        if (s_pending) { s_tgt_keep = true; erase = false; }   /* erased by ota_mark_valid once this image proved itself */
+    } else if (*from && ver_cmp(from, FW_VERSION_STR) == 0) {
+        char m[64]; snprintf(m, sizeof m, "%s did not boot: rolled back to %s", to, FW_VERSION_STR);
+        ESP_LOGE(TAG, "last update failed: %s", m);
+        ota_failed_event(m, to);                      /* buffered by the cloud until the first hello */
+    }
+    if (erase) { nvs_erase_key(h, KEY_TGT); nvs_commit(h); }
+    nvs_close(h);
 }
 
 esp_err_t ota_init(void)
@@ -450,5 +556,6 @@ esp_err_t ota_init(void)
     ESP_LOGI(TAG, "running %s (%s), fw %s, repo '%s', token %s",
              run ? run->label : "?", st == ESP_OTA_IMG_PENDING_VERIFY ? "PENDING VERIFY" : st == ESP_OTA_IMG_VALID ? "valid" : "undefined",
              FW_VERSION_STR, g_cfg.ota_repo, s_pat[0] ? "set" : "not set");
+    tgt_boot_check();
     return ESP_OK;                                /* the worker task is created per job (kick) */
 }

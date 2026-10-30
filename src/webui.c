@@ -566,6 +566,7 @@ static esp_err_t ota_kick(httpd_req_t *r, esp_err_t e)
 {
     if (e == ESP_ERR_INVALID_STATE) return send_err(r, "409 Conflict", store_is_recording() ? "recording in progress" : upload_active() ? "upload in progress" : "update already running");
     if (e == ESP_ERR_NOT_FOUND) return send_err(r, "409 Conflict", "check for updates first");
+    if (e == ESP_ERR_NOT_ALLOWED) return send_err(r, "409 Conflict", "battery below 20 %: plug the cable in to update");
     if (e != ESP_OK) return send_err(r, "500 Internal Server Error", esp_err_to_name(e));
     vTaskDelay(pdMS_TO_TICKS(50));
     return send_json(r, ota_json(), NULL);

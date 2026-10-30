@@ -170,6 +170,18 @@ Refused while recording or uploading (internal-flash rule). **Update mode** (0.3
 the backend `state off (fw_update)` and destroys the MQTT client, so the job runs with ~145 KB internal RAM (0.3.25+);
 a failed job brings the link back (`CLOUD: resumed`), an installed image reboots. The job needs 24 KB internal free
 (`MIN_HEAP`, measured inside the job task). Every step logs the free heap; reads that block > 2 s log `slow read`.
+**Battery floor** (0.3.37): an install, local or remote, is refused on battery below 20 % (cable in: always allowed).
+
+**Remote update** (0.3.37): backend command `fw_update {version?, force?}` (`docs/protocol-v2.md`, "Remote firmware
+update"). The release lookup (`releases/latest`, or `releases/tags/v<version>`) runs with the cloud link up, so the
+answer goes out on it: `applied {updated:true, from, to, bytes}` → state `updating` → update mode → install as above;
+`applied {updated:false, running, latest}` when not newer and `force` is false; `rejected` `busy` (recording, stopping,
+uploading, OTA running) / `battery_low` / `bad_args` (malformed version, or no release with that tag: `result.msg`) /
+`io_error` (GitHub unreachable: `result.msg`). A failure after `applied` sends an `error` event `{code:"ota_failed",
+msg, version}`: a download/verify failure once the link is back; a new image that rolled back from the old image at its
+next boot (NVS `ota_tgt` = `from>to`, written just before the reboot, cleared once the new image is marked valid).
+There is no periodic check: GitHub is asked only by the UI's Check button or by this command.
+
 The pending-verify state is read from otadata once at boot (`ota_pending_verify()` is a RAM flag): reading otadata in the
 main loop stalled both cores 10x/s and caused interrupt-watchdog resets mid-recording until 0.3.20.
 

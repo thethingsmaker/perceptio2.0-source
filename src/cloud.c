@@ -12,6 +12,7 @@
 #include "led.h"
 #include "store.h"
 #include "upload.h"
+#include "ota.h"
 #include "rlog.h"
 #include "esp_core_dump.h"
 #include "esp_flash.h"
@@ -376,10 +377,33 @@ static cmd_hist_t *hist_find(const char *id)
 static void hist_put(const char *id, const char *status, const char *reason)
 {
     if (!s_hist) return;
-    cmd_hist_t *h = &s_hist[s_hist_n++ % CMD_HISTORY];
+    cmd_hist_t *h = hist_find(id);                       /* a job's final status replaces its "received" (fw_update) */
+    if (!h) h = &s_hist[s_hist_n++ % CMD_HISTORY];
     memset(h, 0, sizeof *h);
     strncpy(h->id, id, sizeof h->id - 1); strncpy(h->status, status, sizeof h->status - 1);
     if (reason) strncpy(h->reason, reason, sizeof h->reason - 1);
+}
+
+/* fw_update outcome, from the OTA task: queue only (defer), the cloud task publishes — before it suspends the link */
+static void fw_update_answer(const char *cmd_id, ota_remote_t o, const char *running, const char *target, uint32_t bytes, const char *msg)
+{
+    const char *tv = (target && (*target == 'v' || *target == 'V')) ? target + 1 : (target ? target : "");
+    cJSON *r = cJSON_CreateObject();
+    const char *status = "applied", *reason = NULL;
+    if (o == OTA_R_UPDATING) {
+        cJSON_AddBoolToObject(r, "updated", true);
+        cJSON_AddStringToObject(r, "from", running); cJSON_AddStringToObject(r, "to", tv);
+        cJSON_AddNumberToObject(r, "bytes", bytes);
+    } else if (o == OTA_R_NOT_NEWER) {
+        cJSON_AddBoolToObject(r, "updated", false);
+        cJSON_AddStringToObject(r, "running", running); cJSON_AddStringToObject(r, "latest", tv);
+    } else {
+        status = "rejected"; reason = o == OTA_R_BAD_VERSION ? "bad_args" : "io_error";
+        cJSON_AddStringToObject(r, "msg", msg ? msg : "");
+    }
+    ESP_LOGI(TAG, "fw_update %s: %s%s%s", cmd_id, status, reason ? " " : "", reason ? reason : "");
+    hist_put(cmd_id, status, reason);
+    ack_ex(cmd_id, status, reason, r, true);
 }
 
 static void handle_cmd(const char *payload, int len)
@@ -470,6 +494,17 @@ static void handle_cmd(const char *payload, int len)
         const char *why = e == APP_OK ? NULL : e == APP_BUSY ? "busy" : "bad_args";
         if (why) { hist_put(id->valuestring, "rejected", why); ack(id->valuestring, "rejected", why, NULL); }
         else { hist_put(id->valuestring, "applied", NULL); ack(id->valuestring, "applied", NULL, NULL); cloud_inventory_changed(); }
+    } else if (strcmp(cmd->valuestring, "fw_update") == 0) {
+        const cJSON *ver = args ? cJSON_GetObjectItem(args, "version") : NULL;
+        const cJSON *frc = args ? cJSON_GetObjectItem(args, "force") : NULL;
+        const char *why = NULL;
+        if ((ver && !cJSON_IsString(ver) && !cJSON_IsNull(ver)) || (frc && !cJSON_IsBool(frc))) why = "bad_args";
+        else {
+            esp_err_t e = ota_remote_update(id->valuestring, cJSON_IsString(ver) ? ver->valuestring : NULL, cJSON_IsTrue(frc), fw_update_answer);
+            why = e == ESP_OK ? NULL : e == ESP_ERR_INVALID_ARG ? "bad_args" : e == ESP_ERR_NOT_ALLOWED ? "battery_low" : "busy";
+        }
+        if (why) { hist_put(id->valuestring, "rejected", why); ack(id->valuestring, "rejected", why, NULL); }
+        else hist_put(id->valuestring, "received", NULL);   /* final ack from fw_update_answer (OTA task) */
     } else if (strcmp(cmd->valuestring, "reboot") == 0) {
         hist_put(id->valuestring, "applied", NULL); ack(id->valuestring, "applied", NULL, NULL);
         app_reboot("cloud");                                 /* waits 1 s for the PUBACK; now also confirms a fresh OTA image */
@@ -636,6 +671,11 @@ static void task(void *arg)
         xTaskNotifyWait(0, 0xFFFFFFFF, &notif, pdMS_TO_TICKS(1000));
         if (notif & 4) {                                     /* suspend: announce, then free the client */
             s_suspended = true;                              /* first: nothing below may recreate it */
+            if (s_connected && s_enrolled) {                 /* what is queued goes out first (fw_update: state updating +
+                                                              * the applied ack); the state PUBACK below confirms them, in order */
+                if (s_state_dirty) { s_state_dirty = false; publish_state(); }
+                ack_flush(); ev_flush();
+            }
             cloud_shutdown(s_susp_reason ? s_susp_reason : "suspend");   /* ≤ 1.2 s, only if connected */
             if (s_cli) { esp_mqtt_client_stop(s_cli); esp_mqtt_client_destroy(s_cli); s_cli = NULL; }
             s_connected = false; s_reconnect_due = 0; s_state = CLOUD_OFF;
