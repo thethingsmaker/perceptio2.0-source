@@ -134,7 +134,8 @@ static void led_update(const bq25180_status_t *bq)
         .done          = bq->chg == BQ_CHG_DONE,
         .safety_fault  = bq->safety_fault,
         .charge_paused = s_chg_paused,
-        .net_bad       = net_ap_active() || netwatch_backend_bad_s() >= 20,   /* 20 s grace for a normal (re)connect */
+        .ap_up         = net_ap_active(),
+        .net_bad       = netwatch_backend_bad_s() >= 20,   /* 20 s grace for a normal (re)connect */
     };
     led_policy_apply(&in);
 }

@@ -1,13 +1,18 @@
 ## Layout (block 1 — modular)
 
 ```
-src/main.c          boot sequence, status callback, change hook, idle loop
+src/main.c          boot sequence, change hook, 100 ms tick; passes hooks to the policy modules below
 src/board.c         pins + I2C0/SPI2/SPI3 bus init, GPIO ISR service installed from core 1
-src/bq25180.c       charger: init (ICHG 500 mA, watchdog off), status, ship mode
+src/bq25180.c       charger: init (ICHG from parameter ichg_ma, default 300 mA; watchdog off), status, ship mode
 src/lp5810.c        LED driver: init, brightness, rgb
 src/imu.c           LSM6DSV320X via the ST driver (components/lsm6dsv320x), burst read
 src/w25n01kv.c      NAND: init + bad-block scan, erase/program/read with ECC status
 src/power.c         VBAT (eFuse-calibrated ADC), BQ /INT -> button hook
+src/button.c        button gestures: double press -> start/stop recording, hold 3 s -> power off
+src/power_mgr.c     power states (ON / OFF = ship mode / CHARGE-IDLE), charge gate, low-battery shutdown, boot report
+src/netwatch.c      fallback AP: up when no network joins or the backend is unreachable 90 s, off when it is back
+src/led_policy.c    status LED priority list (see LED)
+src/diag.c          temporary: once-a-minute stack report (DIAG line), idle only
 src/net.c           WiFi join from NVS list, keepalive, mDNS
 src/sampler.c       core-1 DRDY-driven sampler with sinks (store_feed, webui_feed)
 src/store.c         recording store: PCR2 files on the NAND (one block per page), core-1 writer + SHA-256, inventory
@@ -41,10 +46,12 @@ After the tests, if a saved network was joined, the board stays connected and st
 - mDNS: `http://<device-name>.local/` and service `_perceptio._tcp` for app discovery (component
   `espressif/mdns`, pulled by `src/idf_component.yml` on first build — needs internet once).
 
-**No known network at boot → fallback access point** `Perceptio-<device id>` (e.g. `Perceptio-d40592485f78`),
-WPA2 password `perceptio`, same web app at `http://192.168.4.1/` (Network tab to add a WiFi). Every 60 s, while no
-phone is connected to the AP, the saved networks are retried; joining one switches the AP off and the cloud link
-starts. The password is the same on every unit — development only, to be replaced before shipping.
+**Fallback access point** `Perceptio-<device id>` (e.g. `Perceptio-d40592485f78`), WPA2 password `perceptio`, same
+web app at `http://192.168.4.1/` (Network tab to add a WiFi). It comes up (`src/netwatch.c`) when no saved network
+joins at boot, or when the backend has been unreachable for 90 s (WiFi without internet, router gone...). While it is
+up and no phone is connected, the saved networks are retried every 60 s. Once the backend has been reachable for 30 s
+the AP is switched off; with a phone connected it stays up and is retried every 30 s. The password is the same on
+every unit — development only, to be replaced before shipping.
 
 The page works on phones (bottom tab bar), follows the system dark/light theme, and needs no internet.
 Tabs: Dashboard · Live (60 fps plots) · Settings (generated from the schema) · Network.
@@ -52,9 +59,9 @@ Tabs: Dashboard · Live (60 fps plots) · Settings (generated from the schema) �
 Core affinity: `sdkconfig.defaults` pins main, WiFi, lwIP and esp_timer to core 0; `httpd` has `core_id = 0`;
 the sampler is `xTaskCreatePinnedToCore(..., 1)` and installs the GPIO ISR service from core 1.
 
-## LED (`src/led.c`, decided in `main.c` `led_update()`)
+## LED (`src/led.c`, decided in `src/led_policy.c`)
 
-One colour at a time, highest priority first; re-evaluated every second.
+One colour at a time, highest priority first; re-evaluated every second. Each change logs `LED: <state>`.
 
 | Priority | State | LED |
 |---|---|---|
@@ -62,13 +69,38 @@ One colour at a time, highest priority first; re-evaluated every second.
 | 2 | self-test failed | red fast blink, 3 s after boot |
 | 3 | recording | red breathing |
 | 4 | charge fault: paused by temperature, safety timer, cable + cell but not charging for 10 s | yellow fast blink |
-| 5 | WiFi join failed, backend unreachable > 20 s, or fallback AP up | blue fast blink |
+| 5 | fallback AP up (connect a phone now) | blue fast blink |
+| 5b | WiFi or backend unreachable ≥ 20 s, AP not up yet (it follows at 90 s) | blue slow blink (1 Hz) |
 | 6 | charge done (cable + cell) | yellow solid |
 | 7 | charging | yellow breathing |
 | 8 | WiFi + backend OK, idle | green breathing |
 
 While booting: blue breathing. Device off with the cable in (CHARGE-IDLE): yellow breathing / solid / fast blink as above.
 No battery connected: no charging states (the charger toggles; see `power_battery_present()`).
+
+## Power (`src/power_mgr.c`, button in `src/button.c`)
+
+- Button (the BQ25180 push-button): two presses within 1.5 s start/stop a recording; holding 3 s switches off; a
+  single press does nothing. Switching off can also come from `POST /api/v1/power/off` or the low-battery rule below.
+  Every switch-off first closes a running recording, tells the backend (`shutdown`) and marks a fresh OTA image valid.
+- **OFF = BQ25180 ship mode**: the cell is disconnected from the system, nothing runs, the clock is lost. A button
+  press or plugging the cable wakes it (boot with `reset poweron`).
+- **Cable in**: ship mode cannot engage while VIN is present (the charger leaves it), so the board reboots into
+  **CHARGE-IDLE**: LED shows the charge state, no WiFi/UI/sampler. A button press turns it on (software restart,
+  `reset sw`); pulling the cable switches it off into ship mode.
+- **Low battery** (0.3.33): on battery, when the averaged VBAT stays at or below parameter `bat_off_mv` (Power group,
+  default 3300 mV, range 3100–4200) for 30 s, the board switches off as above (`PWR: battery low …`). Without it a
+  flat board browns out at the charger's 3.0 V BUVLO, the unloaded cell recovers, it boots, and repeats.
+- **Boot report** (0.3.34): a breadcrumb in RTC memory (survives resets and deep sleep, not ship mode) tells at the
+  next boot how the last switch-off ended:
+  - `PWR: last power-off reached ship mode (supply was cut)` — normal.
+  - `PWR: last power-off fell back to deep sleep: ship mode did NOT engage (woken by …)` — ship mode was requested but
+    the supply was still on after 6 s, so the firmware went to deep sleep (60 s timer) instead. A timer wake with
+    nobody pressing tries ship mode again and sleeps 600 s, so the board does not turn itself on.
+  - `PWR: last power-off was interrupted while waiting for ship mode` — reset during the 6 s wait.
+  Verified 2026-10-29 (board …fcc): ship mode engages on battery, and after CHARGE-IDLE when the cable is pulled.
+- Charge gate: no NTC, so the board temperature is the ambient proxy: charging pauses outside `chg_tmin_c`..
+  `chg_tmax_c` and resumes with 5 K hysteresis; a BQ safety-timer fault restarts the charge cycle.
 
 ## Recording store (`src/store.c`) — PCR2 on the NAND
 

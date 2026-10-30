@@ -17,7 +17,7 @@ Working style: metric units, English or Italian, no fluff, verify against datash
 - I²C: **SCL IO37, SDA IO36**, 4.7 k pull-ups. BQ25180 @0x6A. LP5810 answers at 0x5C–0x5F **and** 0x6C–0x6F (broadcast range) — expected, not ghosts.
 - Charger **BQ25180YBGR**: MASK_ID 0xC0. `ICHG_CTRL (0x04) = 0x4D` → 500 mA (default 10 mA; the 160 s watchdog resets registers unless disabled → re-arm or disable). STAT0: bit0 VIN_PGOOD, bits[6:5] CHG_STAT 0 none/1 CC/2 CV/3 done. With no battery it reports "done" and regulates BAT to ~4.2 V. Button → /INT on IO6 (pulses on press/release). VBAT: 1 M/1 M divider → IO4 = ADC1_CH3; raw ADC reads ~10 % low → use `esp_adc_cali`.
 - LED **LP5810DDSDR** + FM-B2020RGBA-HG common anode: OUT0 R, OUT1 G, OUT2 B. Init: 0x000=1, 0x001=0, 0x002=0, 0x00D=0x0B, 0x010=0x55, check 0x300==0, 0x020=0x07, DC 0x030..0x032 (R 0x40, G/B ≤0x1E for Vf headroom), PWM 0x040..0x042.
-- Battery EEMB LP803030 700 mAh — not soldered yet at the time of writing. No reverse-polarity protection on the BAT pin.
+- Battery EEMB LP803030 700 mAh — fitted on the test board …fcc. No reverse-polarity protection on the BAT pin.
 
 ## Firmware rules (apply to everything written for this board)
 
@@ -45,6 +45,9 @@ Working style: metric units, English or Italian, no fluff, verify against datash
   `DELETE /api/v1/coredump`; download it with `GET /api/v1/coredump` and decode with
   `esp-coredump info_corefile -t raw -c <file> .pio/build/perceptio2/firmware.elf` (same build!). Log time ≠ sample time:
   the log clock ran ~0.54 s ahead of esp_timer; `recording … started` prints both.
+- **Switching off = ship mode, checked at the next boot.** Ship mode cannot engage with the cable in (→ CHARGE-IDLE)
+  and a request can be ignored, so `power_mgr` leaves an RTC breadcrumb and falls back to deep sleep after 6 s; the boot
+  report says which happened (README "Power"). Never call `bq25180_enter_ship_mode()` directly — use `power_mgr_off()`.
 - WiFi modem sleep adds 100–300 ms per HTTP request → `esp_wifi_set_ps(WIFI_PS_NONE)` while the UI is in use (parameter `wifi_ps`).
 - The web page is just a client of `/api/v1` (see `API.md`); the mobile app uses the same API. Parameters are self-describing (`GET /api/v1/schema` from `PARAM_TABLE` in `src/config.c`) — add a parameter = one table line, never hard-code keys in clients.
 - Passwords never leave the device over the API.
@@ -66,6 +69,9 @@ One driver per file under `src/` with its header in `include/`: `board` (pins, b
 `imu` (wrapper over the vendored ST driver in `components/lsm6dsv320x`), `w25n01kv`, `power` (VBAT calibrated ADC + /INT hook),
 `net` (WiFi list join, keepalive, mDNS), `sampler` (core-1 DRDY task with sinks), `selftest` (bring-up tests on the drivers,
 `/api/v1/selftest`), `config`, `webui`. `partitions.csv`: two OTA slots, no factory app. See README for the table.
+Since refactor step 3 (0.3.28–0.3.32) `main.c` is init + a 100 ms tick, and the policies live in `button` (gestures),
+`netwatch` (fallback AP), `led_policy` (LED priority) and `power_mgr` (ON/OFF/CHARGE-IDLE, charge gate, low battery,
+boot report). Main passes them hooks (backend reachable, prepare-for-off, …), so they do not depend on cloud/store.
 
 Sensitivities come from the ST driver, never fs/32768: accel 0.488 mg/LSB @±16 g; **gyro 0.035 × FS mdps/LSB (140 @±4000)**;
 high-g 10.417 mg/LSB @±320 g. `/info` publishes `xl_mg_lsb, gy_mdps_lsb, hg_mg_lsb`; clients must use them.
@@ -106,7 +112,13 @@ prints the heap, `upload` acks carry `stats.heap_min_kb`, OTA progress lines car
 
 ## Open items
 
-- Solder battery, verify CC→CV→DONE and on-battery operation (charge monitor prints every 2 s after the tests).
+- Battery: on-battery operation, ship mode and low-battery shutdown verified (0.3.33/0.3.34, board …fcc). Still open:
+  a full charge from a low cell (CC→CV→DONE); no battery → disable charging and show "no battery".
+- Fallback AP UX: the LED blinks blue (net bad) ~70 s before the AP exists; the AP channel follows the station's join
+  attempts (one radio); a phone that stays connected keeps the AP up; `wifi_ps` is not restored after the AP stops.
+- Power-off: `cloud_shutdown` runs from the main task while the cloud task may still be active (possible minor race).
+- OTA task stack (7168) could shrink to ~5.5 KB (measured peak). Step 4: feature on/off switches. BLE setup mode
+  (measure RAM first; ~123 KB free idle now).
 - ADC calibration; BQ watchdog policy; LED brightness vs Vf.
 - Next blocks: events mirrored to NAND, cloud `configure` command, secure boot per `PADELIO40_securing_platform_procedure.md` (OTA and the AP fallback are done).
 - Diagnostics added for the 2026-10-29 crash hunt stay until a few days of clean DIAG lines: end-of-stack watchpoint and trace facility (`sdkconfig.defaults`), `src/diag.c`.

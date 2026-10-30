@@ -23,6 +23,7 @@ static const pattern_t PAT[] = {
     [LED_CHARGE_FAULT] = { YEL,           BLINK,   0.25f, 0.00f },
     [LED_FULL]         = { YEL,           SOLID,   1.0f,  0.00f },
     [LED_IDENTIFY]     = { 255, 255, 255, BLINK,   0.25f, 0.00f },
+    [LED_NET_SEARCH]   = { 0,   0,   255, BLINK,   1.0f,  0.00f },
 };
 
 static volatile led_mode_t s_mode = LED_OFF;
