@@ -817,6 +817,13 @@ void cloud_link(bool up)
          * destroyed/created s_cli at once -> InstrFetchProhibited in esp_mqtt_client_destroy (2026-10-29 15:38, board fcc,
          * rejoining WiFi after the fallback AP). */
         if (s_task) xTaskNotify(s_task, 16, eSetBits);
+    } else if (up && was) {
+        /* GOT_IP while the link was already up: a DHCP renewal, possibly with a new address (0.3.38). The hello carries
+         * net.ip, so re-publish it; if the address really changed, the MQTT session usually drops too and the
+         * reconnect sends a hello anyway. */
+        /* runs in the event-loop task (~1.7 KB stack left, DIAG): only flag it; the address is in NET's line above */
+        ESP_LOGI(TAG, "IP event while the link is up: hello re-published");
+        cloud_inventory_changed();                            /* = hello dirty + wake the cloud task */
     } else if (!up && was) {
         cloud_event("wifi_lost", NULL);
         s_connected = false;

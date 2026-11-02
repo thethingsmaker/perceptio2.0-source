@@ -284,7 +284,9 @@ void app_main(void)
             cloud_status_t cs; cloud_get_status(&cs);
             if (cs.state == CLOUD_ONLINE || tick > 900) {
                 ota_mark_valid();
-                char d[80]; snprintf(d, sizeof d, "{\"from\":\"%s\",\"to\":\"%s\"}", config_prev_fw_version(), config_fw_version());
+                const char *from = config_prev_fw_version();
+                if (!*from) from = config_fw_version();   /* a reinstall of the same version: NVS fw_version did not change */
+                char d[80]; snprintf(d, sizeof d, "{\"from\":\"%s\",\"to\":\"%s\"}", from, config_fw_version());
                 bus_event("fw_updated", d);
             }
         }
