@@ -232,7 +232,8 @@ esp_err_t net_start_ap(const char *ssid, const char *pass)
     if (e != ESP_OK) { ESP_LOGE(TAG, "AP start: %s", esp_err_to_name(e)); return e; }
     s_ap_on = true;
     ESP_LOGW(TAG, "fallback AP '%s' up — UI at http://" AP_IP "/%s%s%s", ssid, s_connected ? " (station still on '" : "", s_connected ? s_ssid : "", s_connected ? "')" : "");
-    xTaskCreatePinnedToCore(ap_retry_task, "ap_retry", 3072, NULL, 3, NULL, 0);
+    /* 4096 since 0.3.39: at 3072 a successful rejoin left 496 B (DIAG, 2026-11-03, board f3c) */
+    xTaskCreatePinnedToCore(ap_retry_task, "ap_retry", 4096, NULL, 3, NULL, 0);
     return ESP_OK;
 }
 
