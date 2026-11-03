@@ -7,9 +7,13 @@
 static const char *TAG = "NETWATCH";
 static netwatch_ok_fn    s_ok;
 static netwatch_ap_up_fn s_ap_up;
+static netwatch_ap_down_fn s_ap_down;
 static uint32_t          s_bad_s, s_good_s;
 
-void netwatch_init(netwatch_ok_fn backend_ok, netwatch_ap_up_fn on_ap_up) { s_ok = backend_ok; s_ap_up = on_ap_up; }
+void netwatch_init(netwatch_ok_fn backend_ok, netwatch_ap_up_fn on_ap_up, netwatch_ap_down_fn on_ap_down)
+{
+    s_ok = backend_ok; s_ap_up = on_ap_up; s_ap_down = on_ap_down;
+}
 
 esp_err_t netwatch_start_ap(const char *why)
 {
@@ -32,7 +36,8 @@ void netwatch_tick_1s(void)
     }
     /* AP off NETWATCH_AP_OFF_S after the backend answers (0.3.40; it was 30 s): net_stop_ap refuses while a phone is
      * connected, so with a phone it is retried every 30 s, as before */
-    if (net_ap_active() && (s_good_s == NETWATCH_AP_OFF_S || (s_good_s >= 30 && s_good_s % 30 == 0))) net_stop_ap();
+    if (net_ap_active() && (s_good_s == NETWATCH_AP_OFF_S || (s_good_s >= 30 && s_good_s % 30 == 0))
+        && net_stop_ap() == ESP_OK && !net_ap_active() && s_ap_down) s_ap_down();
 }
 
 uint32_t netwatch_backend_bad_s(void) { return s_bad_s; }

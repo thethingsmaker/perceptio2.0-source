@@ -167,6 +167,14 @@ static bool backend_ok(void)
            || (cs.state == CLOUD_OFF && net_is_connected());
 }
 static void ap_up(void) { webui_start(status_cb); }   /* webui_start is a no-op when running */
+/* AP off (0.3.43): the AP forced WiFi power save off; give the parameter back, unless an upload or an OTA job runs
+ * (both keep it off for their duration and restore what they found when they end) */
+static void ap_down(void)
+{
+    bool busy = upload_active() || ota_busy();
+    if (!busy) net_set_power_save(g_cfg.wifi_ps);
+    ESP_LOGI(TAG, "fallback AP off: WiFi power save %s", busy ? "left off (upload/OTA running)" : g_cfg.wifi_ps ? "back on (wifi_ps)" : "stays off (wifi_ps)");
+}
 
 static void ota_mode_enter(void) { cloud_suspend("fw_update"); }
 
@@ -202,7 +210,7 @@ void app_main(void)
     bq25180_set_ichg_ma(g_cfg.ichg_ma);
     bq25180_set_ilim_ma(g_cfg.ilim_ma);
     button_init(btn_double, btn_long);            /* gestures (button.c); actions run in the main loop */
-    netwatch_init(backend_ok, ap_up);             /* fallback AP + backend watch (netwatch.c) */
+    netwatch_init(backend_ok, ap_up, ap_down);    /* fallback AP + backend watch (netwatch.c) */
     power_mgr_init(power_prepare, idle_board_temp);   /* OFF / CHARGE-IDLE / charge gate (power_mgr.c) */
     lp5810_init();
     lp5810_set_brightness(g_cfg.led_bright);

@@ -21,8 +21,9 @@
 
 typedef bool (*netwatch_ok_fn)(void);               /* backend reachable right now? */
 typedef void (*netwatch_ap_up_fn)(void);            /* the AP just came up (main: make sure the web UI runs) */
+typedef void (*netwatch_ap_down_fn)(void);          /* the AP was just switched off (main: WiFi power save back, 0.3.43) */
 
-void      netwatch_init(netwatch_ok_fn backend_ok, netwatch_ap_up_fn on_ap_up);
+void      netwatch_init(netwatch_ok_fn backend_ok, netwatch_ap_up_fn on_ap_up, netwatch_ap_down_fn on_ap_down);
 esp_err_t netwatch_start_ap(const char *why);       /* no-op when the AP is already up */
 void      netwatch_tick_1s(void);                   /* call once a second */
 uint32_t  netwatch_backend_bad_s(void);             /* seconds the backend has been unreachable (LED policy) */

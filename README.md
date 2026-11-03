@@ -54,7 +54,9 @@ for up to ~8 s). Once the backend has been reachable for 5 s the AP is switched 
 up and is retried every 30 s. With a phone connected (0.3.41/0.3.42) the board still looks for the saved networks every
 30 s on all channels (the scan keeps returning to the AP's channel, so the phone stays connected). A saved network on
 the AP's channel is joined there and the phone stays; one on another channel is joined too, the AP follows it to that
-channel (one radio) and the phone drops once and reconnects. The password is the same on
+channel (one radio) and the phone drops once and reconnects. The AP forces WiFi power save off; when it goes off, parameter `wifi_ps`
+applies again (0.3.43). Exception: if an upload or OTA job is running at that moment, power save is left as that
+job sets it (off) and the job restores what it found when it started. The password is the same on
 every unit — development only, to be replaced before shipping.
 
 The page works on phones (bottom tab bar), follows the system dark/light theme, and needs no internet.
