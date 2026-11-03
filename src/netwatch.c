@@ -30,7 +30,9 @@ void netwatch_tick_1s(void)
                                net_is_connected() ? "WiFi up, no internet?" : "no WiFi");
         netwatch_start_ap(why);
     }
-    if (net_ap_active() && s_good_s >= 30 && s_good_s % 30 == 0) net_stop_ap();   /* retried every 30 s while a phone is on it */
+    /* AP off NETWATCH_AP_OFF_S after the backend answers (0.3.40; it was 30 s): net_stop_ap refuses while a phone is
+     * connected, so with a phone it is retried every 30 s, as before */
+    if (net_ap_active() && (s_good_s == NETWATCH_AP_OFF_S || (s_good_s >= 30 && s_good_s % 30 == 0))) net_stop_ap();
 }
 
 uint32_t netwatch_backend_bad_s(void) { return s_bad_s; }

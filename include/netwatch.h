@@ -5,7 +5,8 @@
  *   - at boot when no saved network joins (main calls netwatch_start_ap), and
  *   - by netwatch_tick_1s() when the backend has been unreachable for NETWATCH_AP_AFTER_S (joined a network without
  *     internet, DNS dead, router gone...).
- * It is switched off again once the backend has been reachable for 30 s (retried every 30 s while a phone uses it).
+ * It is switched off again once the backend has been reachable for NETWATCH_AP_OFF_S (retried every 30 s while a phone
+ * uses it). While it is up and unused, net.c retries the saved networks every 15 s (0.3.40).
  * "Reachable" is decided by the caller's backend_ok() (main: the cloud link answered), so this module does not depend
  * on the cloud module.
  */
@@ -15,6 +16,7 @@
 #include "esp_err.h"
 
 #define NETWATCH_AP_AFTER_S   90
+#define NETWATCH_AP_OFF_S     5                    /* backend reachable this long -> AP off (no phone on it) */
 #define NETWATCH_AP_PASSWORD  "perceptio"           /* same on every unit: development only */
 
 typedef bool (*netwatch_ok_fn)(void);               /* backend reachable right now? */

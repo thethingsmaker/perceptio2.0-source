@@ -49,8 +49,9 @@ After the tests, if a saved network was joined, the board stays connected and st
 **Fallback access point** `Perceptio-<device id>` (e.g. `Perceptio-d40592485f78`), WPA2 password `perceptio`, same
 web app at `http://192.168.4.1/` (Network tab to add a WiFi). It comes up (`src/netwatch.c`) when no saved network
 joins at boot, or when the backend has been unreachable for 90 s (WiFi without internet, router gone...). While it is
-up and no phone is connected, the saved networks are retried every 60 s. Once the backend has been reachable for 30 s
-the AP is switched off; with a phone connected it stays up and is retried every 30 s. The password is the same on
+up and no phone is connected, the saved networks are retried every 15 s (0.3.40; each retry takes the AP off the air
+for up to ~8 s). Once the backend has been reachable for 5 s the AP is switched off; with a phone connected it stays
+up and is retried every 30 s. The password is the same on
 every unit — development only, to be replaced before shipping.
 
 The page works on phones (bottom tab bar), follows the system dark/light theme, and needs no internet.

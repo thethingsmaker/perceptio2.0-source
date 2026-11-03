@@ -39,7 +39,7 @@ static void evt(void *arg, esp_event_base_t base, int32_t id, void *data)
         ESP_LOGW(TAG, "disconnected (reason %d)", d->reason);
         if (was && !s_testing) link_notify(false);
         xEventGroupSetBits(s_ev, EV_FAILED);
-        /* with the fallback AP up, the AP retry task reconnects (every 60 s, only while no phone is on the AP):
+        /* with the fallback AP up, the AP retry task reconnects (every AP_RETRY_S, only while no phone is on the AP):
          * a station reconnect loop hops channels and would keep knocking the phone off the AP */
         if (s_keepalive && !s_testing && !s_ap_on) { vTaskDelay(pdMS_TO_TICKS(1000)); esp_wifi_connect(); }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
@@ -176,6 +176,7 @@ static void ap_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
     if (id == WIFI_EVENT_AP_STADISCONNECTED) ESP_LOGI(TAG, "AP: phone/PC left");
 }
 
+#define AP_RETRY_S 15                              /* saved networks retried this often while the AP is up and unused */
 static int ap_clients(void)
 {
     wifi_sta_list_t l;
@@ -188,7 +189,9 @@ static void ap_retry_task(void *arg)
 {
     /* Lives as long as the AP. Switching the AP off is decided by main (backend reachable again: net_stop_ap). */
     while (s_ap_on) {
-        vTaskDelay(pdMS_TO_TICKS(60000));
+        /* every AP_RETRY_S (15 s since 0.3.40; it was 60 s): a retry costs the AP at most ~8 s off the air, and it only
+         * runs while no phone is connected — with 60 s the board needed up to a minute to notice the router was back */
+        for (int i = 0; i < AP_RETRY_S && s_ap_on; i++) vTaskDelay(pdMS_TO_TICKS(1000));
         if (!s_ap_on) break;
         if (s_connected || s_testing) continue;
         if (ap_clients() > 0) continue;
