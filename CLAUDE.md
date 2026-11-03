@@ -17,7 +17,7 @@ Working style: metric units, English or Italian, no fluff, verify against datash
 - I²C: **SCL IO37, SDA IO36**, 4.7 k pull-ups. BQ25180 @0x6A. LP5810 answers at 0x5C–0x5F **and** 0x6C–0x6F (broadcast range) — expected, not ghosts.
 - Charger **BQ25180YBGR**: MASK_ID 0xC0. `ICHG_CTRL (0x04) = 0x4D` → 500 mA (default 10 mA; the 160 s watchdog resets registers unless disabled → re-arm or disable). STAT0: bit0 VIN_PGOOD, bits[6:5] CHG_STAT 0 none/1 CC/2 CV/3 done. With no battery it reports "done" and regulates BAT to ~4.2 V. Button → /INT on IO6 (pulses on press/release). VBAT: 1 M/1 M divider → IO4 = ADC1_CH3; raw ADC reads ~10 % low → use `esp_adc_cali`.
 - LED **LP5810DDSDR** + FM-B2020RGBA-HG common anode: OUT0 R, OUT1 G, OUT2 B. Init: 0x000=1, 0x001=0, 0x002=0, 0x00D=0x0B, 0x010=0x55, check 0x300==0, 0x020=0x07, DC 0x030..0x032 (R 0x40, G/B ≤0x1E for Vf headroom), PWM 0x040..0x042.
-- Battery EEMB LP803030 700 mAh — fitted on the test board …fcc. No reverse-polarity protection on the BAT pin.
+- Battery EEMB LP803030 700 mAh — fitted on the test boards …fcc and …f3c. No reverse-polarity protection on the BAT pin.
 
 ## Firmware rules (apply to everything written for this board)
 
@@ -40,7 +40,12 @@ Working style: metric units, English or Italian, no fluff, verify against datash
   (`gaps`, `gap_max_us` in END2 and `rec_stopped`, lost-samples flag on the block); `dropped` only counts a full ring.
 - **OTA runs in update mode**: check and install destroy the MQTT client (frees ~29 KB, measured) and announce `state off
   (fw_update)`; an installed image reboots, a failed one resumes the link. The phase is set busy *before* that, or the UI
-  stops polling.
+  stops polling. The backend command `fw_update` (0.3.37) does its GitHub lookup with the link still UP (~115 KB free,
+  ~2 s) so that its answer goes out on it; the cloud task's suspend handler publishes the queued state and acks before
+  `cloud_shutdown`, whose state PUBACK confirms them in order (verified: the dashboard shows `applied` for reinstalls).
+  Log lines written in update mode wait in the RAM ring and are LOST when a successful install reboots — the ack on the
+  dashboard and the next boot's `marked valid` / `fw_updated` are the proof, not the log. Any install refuses on battery
+  below 20 % (`OTA_MIN_SOC_PCT`). NVS `ota_tgt` = `from>to` lets the old image report a rollback (`ota_failed`).
 - **Crash evidence is kept**: the core dump stays in flash after its one-line report (`cd_seen` = its CRC in NVS) until
   `DELETE /api/v1/coredump`; download it with `GET /api/v1/coredump` and decode with
   `esp-coredump info_corefile -t raw -c <file> .pio/build/perceptio2/firmware.elf` (same build!). Log time ≠ sample time:
@@ -48,6 +53,15 @@ Working style: metric units, English or Italian, no fluff, verify against datash
 - **Switching off = ship mode, checked at the next boot.** Ship mode cannot engage with the cable in (→ CHARGE-IDLE)
   and a request can be ignored, so `power_mgr` leaves an RTC breadcrumb and falls back to deep sleep after 6 s; the boot
   report says which happened (README "Power"). Never call `bq25180_enter_ship_mode()` directly — use `power_mgr_off()`.
+- **One radio for the fallback AP and the station** (`net.c`, `netwatch.c`): both are always on the same channel and the
+  AP follows the station (the AP starts on channel 1, but the station's retries leave the radio on the last channel they
+  scanned). Scans keep returning to the AP's channel (`home_chan_dwell_time` 30 ms), so a scan does not drop a phone on
+  the AP; a JOIN on another channel moves the AP and drops it once (accepted, 0.3.42). Timings (0.3.40–0.3.43): AP after
+  90 s without backend, saved networks retried every 15 s while the AP is unused / every 30 s (all channels) with a
+  phone on it, AP off 5 s after the backend answers (30 s retries while a phone is on it), then `wifi_ps` is applied again.
+- **Hooks called from the event-loop task only flag** (`sys_evt` has ~1.7 KB stack left): `cloud_link`, the IP-event
+  path, anything registered with `net_add_link_hook`. Work goes to the owning task (cloud task: notify bits).
+  Task stacks are sized from DIAG peaks with margin: `ap_retry` had 496 B left at 3072 → 4096 (0.3.39).
 - WiFi modem sleep adds 100–300 ms per HTTP request → `esp_wifi_set_ps(WIFI_PS_NONE)` while the UI is in use (parameter `wifi_ps`).
 - The web page is just a client of `/api/v1` (see `API.md`); the mobile app uses the same API. Parameters are self-describing (`GET /api/v1/schema` from `PARAM_TABLE` in `src/config.c`) — add a parameter = one table line, never hard-code keys in clients.
 - Passwords never leave the device over the API.
@@ -114,11 +128,20 @@ prints the heap, `upload` acks carry `stats.heap_min_kb`, OTA progress lines car
 
 - Battery: on-battery operation, ship mode and low-battery shutdown verified (0.3.33/0.3.34, board …fcc). Still open:
   a full charge from a low cell (CC→CV→DONE); no battery → disable charging and show "no battery".
-- Fallback AP UX: the LED blinks blue (net bad) ~70 s before the AP exists; the AP channel follows the station's join
-  attempts (one radio); a phone that stays connected keeps the AP up; `wifi_ps` is not restored after the AP stops.
+- Fallback AP: done (0.3.35 LED, 0.3.39–0.3.43). BLE setup mode would remove the AP/station channel conflict for phone
+  setup (BLE hops on its own channels) — measure its internal RAM first (~123 KB free idle now).
 - Power-off: `cloud_shutdown` runs from the main task while the cloud task may still be active (possible minor race).
-- OTA task stack (7168) could shrink to ~5.5 KB (measured peak). Step 4: feature on/off switches. BLE setup mode
-  (measure RAM first; ~123 KB free idle now).
+- OTA task stack 7168: peak 4.8 KB (remote update with a tag lookup, 2026-11-03) → could go to ~6 KB. Step 4: feature
+  on/off switches.
+- Upload/OTA capture the power-save mode when they start and restore it: one started while the AP is up restores "off"
+  even if `wifi_ps` is on (minor; `wifi_ps` defaults to off).
+- The remote log loses the text of the WiFi driver's own lines (they arrive in fragments: `wifi:W (…) wifi:W …`); a USB
+  serial log shows them. Seen during rejoin attempts, harmless so far.
+- 2026-10-30: GitHub TLS handshakes failed for ~12 min (`-0x7280` peer closed / `-0x0050` reset, 13–50 s each) with WiFi,
+  backend and memory fine — network/GitHub side. If it recurs, consider one automatic retry of a check.
+- Board …f3c: intermittent USB 5 V contact (glue on the connector) → `VIN` flickers, LED flips charging/ok, charge
+  faults; its BQ25180 TS_CONTROL (0x0B) reads 0x0C where …fcc reads 0x00 — firmware never writes it, check the
+  datasheet before relying on TS behaviour.
 - ADC calibration; BQ watchdog policy; LED brightness vs Vf.
 - Next blocks: events mirrored to NAND, cloud `configure` command, secure boot per `PADELIO40_securing_platform_procedure.md` (OTA and the AP fallback are done).
 - Diagnostics added for the 2026-10-29 crash hunt stay until a few days of clean DIAG lines: end-of-stack watchpoint and trace facility (`sdkconfig.defaults`), `src/diag.c`.

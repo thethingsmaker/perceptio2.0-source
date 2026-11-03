@@ -37,6 +37,7 @@
 #include "diag.h"
 #include "button.h"
 #include "netwatch.h"
+#include "ble.h"
 #include "led_policy.h"
 #include "power_mgr.h"
 #include "rlog.h"
@@ -241,6 +242,7 @@ void app_main(void)
     upload_init(cloud_upload_done, cloud_device_id());               /* resumable HTTPS upload task (core 0), driven by the `upload` command */
     ota_init();                                   /* GitHub Releases updater; this image may still be PENDING_VERIFY */
     ota_set_update_mode(ota_mode_enter, cloud_resume);   /* an install runs with the cloud link down (frees its RAM) */
+    ble_init(cloud_device_id());                  /* 0.3.44: advertising only, logs its RAM cost (ble.c) */
 
     if (g_cfg.selftest_boot) {
         selftest_run(ST_QUICK | (g_cfg.selftest_full ? ST_NAND_STRESS : 0), g_cfg.selftest_full ? 30 : 0);

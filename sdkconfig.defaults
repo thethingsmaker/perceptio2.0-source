@@ -100,3 +100,17 @@ CONFIG_FREERTOS_USE_TRACE_FACILITY=y
 # stack (4 KB, never touches the flash) to PSRAM.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
 CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y
+
+# BLE (0.3.44 — measurement build: NimBLE peripheral, advertising only). Phone setup/control will move here from the
+# fallback AP (docs: CLAUDE.md "One radio"). Core split: controller and host on core 0. Host memory in PSRAM.
+# Changing this file: delete sdkconfig.perceptio2 before building (CLAUDE.md).
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_CONTROLLER_ENABLED=y
+CONFIG_BT_CTRL_PINNED_TO_CORE_0=y
+CONFIG_BT_NIMBLE_PINNED_TO_CORE_0=y
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
