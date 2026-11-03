@@ -51,9 +51,10 @@ web app at `http://192.168.4.1/` (Network tab to add a WiFi). It comes up (`src/
 joins at boot, or when the backend has been unreachable for 90 s (WiFi without internet, router gone...). While it is
 up and no phone is connected, the saved networks are retried every 15 s (0.3.40; each retry takes the AP off the air
 for up to ~8 s). Once the backend has been reachable for 5 s the AP is switched off; with a phone connected it stays
-up and is retried every 30 s. With a phone connected (0.3.41) the board still looks for the saved networks every
-30 s, but only on the AP's own channel: if one is there it joins it on that channel and the phone stays connected; a
-network on another channel is joined only after the phone leaves (going there would drop the phone). The password is the same on
+up and is retried every 30 s. With a phone connected (0.3.41/0.3.42) the board still looks for the saved networks every
+30 s on all channels (the scan keeps returning to the AP's channel, so the phone stays connected). A saved network on
+the AP's channel is joined there and the phone stays; one on another channel is joined too, the AP follows it to that
+channel (one radio) and the phone drops once and reconnects. The password is the same on
 every unit — development only, to be replaced before shipping.
 
 The page works on phones (bottom tab bar), follows the system dark/light theme, and needs no internet.

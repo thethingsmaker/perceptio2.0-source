@@ -183,45 +183,45 @@ static int ap_clients(void)
     return esp_wifi_ap_get_sta_list(&l) == ESP_OK ? l.num : 0;
 }
 
-/* A phone is on the AP (0.3.41). A normal retry scans every channel and joins wherever the router is: the radio (one for
- * AP and station) leaves the AP's channel and the phone drops. Instead: scan ONLY the AP's current channel; if a saved
- * network is there, join it on that channel (the AP does not move, the phone stays). If none is there, do nothing:
- * the normal retry resumes once the phone leaves. Called with s_radio free; takes it. */
+/* A phone is on the AP (0.3.41, all channels since 0.3.42). The scan covers every channel but returns to the AP's
+ * channel between channels (home_chan_dwell_time, 30 ms), so the AP stays on the air and the phone stays connected.
+ * A saved network found on the AP's channel is joined there (the phone stays); one found on another channel is joined
+ * too: the AP has to follow the station to that channel (one radio), so the phone drops once and reconnects by itself
+ * — being back online wins over keeping the phone's session. Nothing found: nothing happens (logged once).
+ * Called with s_radio free; takes it. */
 #define AP_PHONE_RETRY_S 30
-static void same_channel_retry(void)
+static void phone_retry(void)
 {
-    static uint8_t s_quiet_ch;                    /* "nothing on channel N" already logged for this channel */
+    static bool s_quiet;                          /* "no saved network in range" already logged */
     uint8_t ch = 0; wifi_second_chan_t sec;
     if (esp_wifi_get_channel(&ch, &sec) != ESP_OK || ch == 0) return;
     if (xSemaphoreTake(s_radio, 0) != pdTRUE) return;
-    wifi_scan_config_t sc = { .channel = ch, .show_hidden = false, .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-                              .scan_time.active = { .min = 60, .max = 120 } };
+    wifi_scan_config_t sc = { .channel = 0, .show_hidden = false, .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+                              .scan_time.active = { .min = 60, .max = 120 }, .home_chan_dwell_time = 30 };
     int pick = -1; uint8_t bssid_ch = ch;
     if (esp_wifi_scan_start(&sc, true) == ESP_OK) {
         uint16_t n = 0; esp_wifi_scan_get_ap_num(&n);
-        if (n > 16) n = 16;
+        if (n > 24) n = 24;
         wifi_ap_record_t *ap = calloc(n ? n : 1, sizeof *ap);
         uint16_t m = n;
-        if (ap && esp_wifi_scan_get_ap_records(&m, ap) == ESP_OK) {
+        if (ap && esp_wifi_scan_get_ap_records(&m, ap) == ESP_OK) {   /* sorted by RSSI: the strongest of an SSID first */
             const cfg_wifi_list_t *wl = config_wifi_get();
             for (int i = 0; i < wl->count && pick < 0; i++)          /* saved-list order = the user's preference */
                 for (int k = 0; k < m; k++)
-                    if (ap[k].primary == ch && strcmp((char *)ap[k].ssid, wl->list[i].ssid) == 0) { pick = i; break; }
+                    if (strcmp((char *)ap[k].ssid, wl->list[i].ssid) == 0) { pick = i; bssid_ch = ap[k].primary; break; }
         } else esp_wifi_clear_ap_list();
         free(ap);
     }
     if (pick < 0) {
-        if (s_quiet_ch != ch) {
-            ESP_LOGI(TAG, "AP: phone connected, no saved network on the AP's channel %u: waiting for the phone to leave "
-                          "(a scan of the other channels would drop it)", ch);
-            s_quiet_ch = ch;
-        }
+        if (!s_quiet) { ESP_LOGI(TAG, "AP: phone connected, no saved network in range (scanned all channels)"); s_quiet = true; }
         xSemaphoreGive(s_radio);
         return;
     }
-    s_quiet_ch = 0;
+    s_quiet = false;
     const cfg_wifi_list_t *wl = config_wifi_get();
-    ESP_LOGI(TAG, "AP: phone connected, '%s' is on the AP's channel %u: joining it there (the phone stays)", wl->list[pick].ssid, ch);
+    if (bssid_ch == ch) ESP_LOGI(TAG, "AP: phone connected, '%s' is on the AP's channel %u: joining it there (the phone stays)", wl->list[pick].ssid, ch);
+    else ESP_LOGW(TAG, "AP: phone connected, '%s' is on channel %u, the AP on %u: joining it — the AP moves to channel %u, "
+                       "the phone drops once and reconnects", wl->list[pick].ssid, bssid_ch, ch, bssid_ch);
     wifi_config_t wc = { 0 };
     strncpy((char *)wc.sta.ssid, wl->list[pick].ssid, sizeof wc.sta.ssid);
     strncpy((char *)wc.sta.password, wl->list[pick].pass, sizeof wc.sta.password);
@@ -235,9 +235,9 @@ static void same_channel_retry(void)
     if (b & EV_CONNECTED) {
         strncpy(s_ssid, wl->list[pick].ssid, sizeof s_ssid - 1);
         s_keepalive = true;
-        ESP_LOGI(TAG, "joined '%s', ip %s (phone still on the AP)", s_ssid, s_ip);
+        ESP_LOGI(TAG, "joined '%s' on channel %u, ip %s (with a phone on the AP)", s_ssid, bssid_ch, s_ip);
     } else {
-        ESP_LOGW(TAG, "'%s' failed on channel %u (%s)", wl->list[pick].ssid, ch, (b & EV_FAILED) ? "auth / no AP" : e != ESP_OK ? esp_err_to_name(e) : "timeout");
+        ESP_LOGW(TAG, "'%s' failed on channel %u (%s)", wl->list[pick].ssid, bssid_ch, (b & EV_FAILED) ? "auth / no AP" : e != ESP_OK ? esp_err_to_name(e) : "timeout");
         esp_wifi_disconnect();
         vTaskDelay(pdMS_TO_TICKS(300));
     }
@@ -245,7 +245,7 @@ static void same_channel_retry(void)
 }
 
 /* Retry the saved networks while nobody uses the AP (a station connect attempt moves the radio off the AP channel
- * and would drop a connected phone); with a phone on it, same_channel_retry() every AP_PHONE_RETRY_S. */
+ * and would drop a connected phone); with a phone on it, phone_retry() every AP_PHONE_RETRY_S. */
 static void ap_retry_task(void *arg)
 {
     /* Lives as long as the AP. Switching the AP off is decided by main (backend reachable again: net_stop_ap). */
@@ -259,7 +259,7 @@ static void ap_retry_task(void *arg)
         if (ap_clients() > 0) {
             static int s_phone_s;                     /* seconds since the last same-channel try */
             s_phone_s += AP_RETRY_S;
-            if (s_phone_s >= AP_PHONE_RETRY_S) { s_phone_s = 0; same_channel_retry(); }
+            if (s_phone_s >= AP_PHONE_RETRY_S) { s_phone_s = 0; phone_retry(); }
             continue;
         }
         ESP_LOGI(TAG, "AP: retrying saved networks");
