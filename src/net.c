@@ -41,7 +41,10 @@ static void evt(void *arg, esp_event_base_t base, int32_t id, void *data)
         if (was && !s_testing) link_notify(false);
         xEventGroupSetBits(s_ev, EV_FAILED);
         if (was || !s_down_since_us) s_down_since_us = esp_timer_get_time();   /* rejoin_task: whole list after 15 s */
-        if (s_keepalive && !s_testing) { vTaskDelay(pdMS_TO_TICKS(1000)); esp_wifi_connect(); }
+        if (s_keepalive && !s_testing) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            if (s_keepalive && !s_testing) esp_wifi_connect();   /* re-check: rejoin_task may have taken over meanwhile */
+        }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
         snprintf(s_ip, sizeof s_ip, IPSTR, IP2STR(&e->ip_info.ip));
@@ -153,7 +156,14 @@ static esp_err_t connect_from_list_locked(uint32_t timeout_ms)
         strncpy((char *)wc.sta.ssid, wl->list[i].ssid, sizeof wc.sta.ssid);
         strncpy((char *)wc.sta.password, wl->list[i].pass, sizeof wc.sta.password);
         wc.sta.threshold.authmode = wl->list[i].pass[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
-        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+        /* 0.3.48: no ESP_ERROR_CHECK here. With the AP gone, the keepalive reconnect (event handler) can still have a
+         * connect in flight when rejoin_task walks the list; set_config then fails with ESP_ERR_WIFI_STATE and the
+         * check aborted the board (panic in task 'rejoin', 2026-11-04 21:36 and 21:41, board f3c). Stop any attempt
+         * first, and skip a network whose config is refused instead of crashing. */
+        esp_wifi_disconnect();
+        vTaskDelay(pdMS_TO_TICKS(100));
+        esp_err_t ce = esp_wifi_set_config(WIFI_IF_STA, &wc);
+        if (ce != ESP_OK) { ESP_LOGW(TAG, "'%s': set_config %s, skipped", wl->list[i].ssid, esp_err_to_name(ce)); continue; }
         xEventGroupClearBits(s_ev, EV_CONNECTED | EV_FAILED);
         ESP_LOGI(TAG, "trying [%d] '%s' ...", i, wl->list[i].ssid);
         esp_wifi_connect();
