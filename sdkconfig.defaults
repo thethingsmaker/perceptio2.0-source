@@ -143,3 +143,8 @@ CONFIG_BT_NIMBLE_SPS_SERVICE=n
 CONFIG_BT_NIMBLE_HR_SERVICE=n
 CONFIG_BT_NIMBLE_BAS_SERVICE=n
 CONFIG_BT_NIMBLE_DIS_SERVICE=n
+
+# 0.3.50 — internal RAM: the internal-flash driver runs from ROM instead of IRAM (~11 KB of spi_flash code was in
+# IRAM). The S3 ROM driver lacks only flash auto-suspend, which this board does not use. Quad DIO flash, not octal.
+# Changing this file: delete sdkconfig.perceptio2 before building (CLAUDE.md).
+CONFIG_SPI_FLASH_ROM_IMPL=y
