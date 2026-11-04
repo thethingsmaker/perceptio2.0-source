@@ -51,9 +51,9 @@ Max 8 networks. SSID ≤ 32 bytes, password ≤ 64.
 | | |
 |---|---|
 | `GET /wifi/scan` | nearby networks, blocks ~2–3 s: `[{ssid, rssi, channel, open}]`, unique SSIDs, strongest first, hidden ones omitted. 409 while a connect attempt is running |
-| `POST /wifi/test` | `{ssid, pass}` → 202: joins that network, waits for DHCP, resolves the backend host, saves it **only on success**, then returns to the previous network (with none — fallback AP — it stays on the new one). Takes 5–40 s; while connected elsewhere the board is away from the current network meanwhile. 409 while recording/uploading/updating or another test runs; 400 for a password of 1–7 chars |
+| `POST /wifi/test` | `{ssid, pass}` → 202: joins that network, waits for DHCP, resolves the backend host, saves it **only on success**, then returns to the previous network (with none it stays on the new one). Takes 5–40 s; while connected elsewhere the board is away from the current network meanwhile. 409 while recording/uploading/updating or another test runs; 400 for a password of 1–7 chars |
 | `POST /wifi/connect` | `{ssid}` of a saved network → 202: switch to it now (same steps as the test; stays there if it works, nothing saved; on failure returns to the previous network). Progress in `GET /wifi/test` with `mode:"connect"`. 404 not saved, 409 already connected / busy / recording |
-| `POST /wifi/prefer` | `{ssid}`: moves it to the top of the saved list (tried first at boot and by the fallback-AP retries); answers like `GET /wifi` |
+| `POST /wifi/prefer` | `{ssid}`: moves it to the top of the saved list (tried first at boot and by the 15 s rejoin); answers like `GET /wifi` |
 | `GET /wifi/test` | `{state: idle/running/ok/failed, ssid, step?, ip?, rssi?, internet?, saved?, error?, reason?, current_ssid}` — poll it; requests fail while the board is away from the network |
 | `POST /reboot` | `{"ok":true}` then restart ~200 ms later |
 | `GET /ota` | `{phase, running, slot, pending_verify, repo, token_set, token_hint, checked, latest?, asset?, asset_bytes?, published?, update_available?, received_bytes?, total_bytes?, error?}` — phase: idle, checking, downloading, verifying, rebooting, error |

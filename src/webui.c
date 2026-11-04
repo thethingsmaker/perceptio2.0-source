@@ -788,7 +788,7 @@ static void ws_sender_task(void *arg)
 /* ------------------------------------------------------------------ */
 esp_err_t webui_start(webui_status_fn fn)
 {
-    if (s_hd) return ESP_OK;                      /* already running (e.g. the fallback AP came up later) */
+    if (s_hd) return ESP_OK;                      /* already running */
     s_status_fn = fn;
     if (!s_ring) {
         webui_sample_t *ring = heap_caps_calloc(RING_N, sizeof *ring, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);

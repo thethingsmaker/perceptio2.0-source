@@ -1,29 +1,17 @@
 /*
- * Network watch + fallback access point (refactor step 3b, fw 0.3.29 — moved out of main.c, behaviour unchanged).
+ * Backend watch (refactor step 3b, fw 0.3.29; the fallback access point it used to start was removed in 0.3.46 —
+ * phone setup moves to BLE).
  *
- * The UI must always be reachable. The AP "Perceptio-<device id>" (password NETWATCH_AP_PASSWORD) is started
- *   - at boot when no saved network joins (main calls netwatch_start_ap), and
- *   - by netwatch_tick_1s() when the backend has been unreachable for NETWATCH_AP_AFTER_S (joined a network without
- *     internet, DNS dead, router gone...).
- * It is switched off again once the backend has been reachable for NETWATCH_AP_OFF_S (retried every 30 s while a phone
- * uses it). While it is up and unused, net.c retries the saved networks every 15 s (0.3.40).
- * "Reachable" is decided by the caller's backend_ok() (main: the cloud link answered), so this module does not depend
- * on the cloud module.
+ * Counts how long the backend has been unreachable, for the LED policy ("no network / no backend": blue slow blink
+ * after 20 s). "Reachable" is decided by the caller's backend_ok() (main: the cloud link answered), so this module
+ * does not depend on the cloud module. Rejoining the saved networks is net.c's job.
  */
 #pragma once
-#include <stdbool.h>
 #include <stdint.h>
-#include "esp_err.h"
-
-#define NETWATCH_AP_AFTER_S   90
-#define NETWATCH_AP_OFF_S     5                    /* backend reachable this long -> AP off (no phone on it) */
-#define NETWATCH_AP_PASSWORD  "perceptio"           /* same on every unit: development only */
+#include <stdbool.h>
 
 typedef bool (*netwatch_ok_fn)(void);               /* backend reachable right now? */
-typedef void (*netwatch_ap_up_fn)(void);            /* the AP just came up (main: make sure the web UI runs) */
-typedef void (*netwatch_ap_down_fn)(void);          /* the AP was just switched off (main: WiFi power save back, 0.3.43) */
 
-void      netwatch_init(netwatch_ok_fn backend_ok, netwatch_ap_up_fn on_ap_up, netwatch_ap_down_fn on_ap_down);
-esp_err_t netwatch_start_ap(const char *why);       /* no-op when the AP is already up */
+void      netwatch_init(netwatch_ok_fn backend_ok);
 void      netwatch_tick_1s(void);                   /* call once a second */
 uint32_t  netwatch_backend_bad_s(void);             /* seconds the backend has been unreachable (LED policy) */

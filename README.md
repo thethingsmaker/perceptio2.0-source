@@ -10,7 +10,7 @@ src/w25n01kv.c      NAND: init + bad-block scan, erase/program/read with ECC sta
 src/power.c         VBAT (eFuse-calibrated ADC), BQ /INT -> button hook
 src/button.c        button gestures: double press -> start/stop recording, hold 3 s -> power off
 src/power_mgr.c     power states (ON / OFF = ship mode / CHARGE-IDLE), charge gate, low-battery shutdown, boot report
-src/netwatch.c      fallback AP: up when no network joins or the backend is unreachable 90 s, off when it is back
+src/netwatch.c      backend watch: seconds the backend has been unreachable (LED)
 src/led_policy.c    status LED priority list (see LED)
 src/diag.c          temporary: once-a-minute stack report (DIAG line), idle only
 src/net.c           WiFi join from NVS list, keepalive, mDNS
@@ -46,18 +46,10 @@ After the tests, if a saved network was joined, the board stays connected and st
 - mDNS: `http://<device-name>.local/` and service `_perceptio._tcp` for app discovery (component
   `espressif/mdns`, pulled by `src/idf_component.yml` on first build — needs internet once).
 
-**Fallback access point** `Perceptio-<device id>` (e.g. `Perceptio-d40592485f78`), WPA2 password `perceptio`, same
-web app at `http://192.168.4.1/` (Network tab to add a WiFi). It comes up (`src/netwatch.c`) when no saved network
-joins at boot, or when the backend has been unreachable for 90 s (WiFi without internet, router gone...). While it is
-up and no phone is connected, the saved networks are retried every 15 s (0.3.40; each retry takes the AP off the air
-for up to ~8 s). Once the backend has been reachable for 5 s the AP is switched off; with a phone connected it stays
-up and is retried every 30 s. With a phone connected (0.3.41/0.3.42) the board still looks for the saved networks every
-30 s on all channels (the scan keeps returning to the AP's channel, so the phone stays connected). A saved network on
-the AP's channel is joined there and the phone stays; one on another channel is joined too, the AP follows it to that
-channel (one radio) and the phone drops once and reconnects. The AP forces WiFi power save off; when it goes off, parameter `wifi_ps`
-applies again (0.3.43). Exception: if an upload or OTA job is running at that moment, power save is left as that
-job sets it (off) and the job restores what it found when it started. The password is the same on
-every unit — development only, to be replaced before shipping.
+**No access point since 0.3.46** (BLE line: phone setup and control move to BLE, `src/ble.c`; the last version with
+the fallback AP is 0.3.43). Without a reachable saved network, or after losing it for 15 s, `net.c` walks the saved
+list again every 15 s ("offline for N s: retrying saved networks"); the web app and mDNS run whenever the station has an
+address.
 
 The page works on phones (bottom tab bar), follows the system dark/light theme, and needs no internet.
 Tabs: Dashboard · Live (60 fps plots) · Settings (generated from the schema) · Network.
@@ -75,8 +67,7 @@ One colour at a time, highest priority first; re-evaluated every second. Each ch
 | 2 | self-test failed | red fast blink, 3 s after boot |
 | 3 | recording | red breathing |
 | 4 | charge fault: paused by temperature, safety timer, cable + cell but not charging for 10 s | yellow fast blink |
-| 5 | fallback AP up (connect a phone now) | blue fast blink |
-| 5b | WiFi or backend unreachable ≥ 20 s, AP not up yet (it follows at 90 s) | blue slow blink (1 Hz) |
+| 5 | WiFi or backend unreachable ≥ 20 s | blue slow blink (1 Hz) |
 | 6 | charge done (cable + cell) | yellow solid |
 | 7 | charging | yellow breathing |
 | 8 | WiFi + backend OK, idle | green breathing |
@@ -191,9 +182,10 @@ There is no periodic check: GitHub is asked only by the UI's Check button or by 
 The pending-verify state is read from otadata once at boot (`ota_pending_verify()` is a RAM flag): reading otadata in the
 main loop stalled both cores 10x/s and caused interrupt-watchdog resets mid-recording until 0.3.20.
 
-Publishing a release: bump `FW_VERSION_STR` in `include/config.h` to match the tag (`v0.3.1` ↔ `0.3.1`), build, attach
-`.pio/build/perceptio2/firmware.bin` to a GitHub Release with that tag. If the tag and `FW_VERSION_STR` differ the UI
-keeps reporting "update available".
+Publishing a release: bump `FW_VERSION_STR` in `include/config.h` to match the tag (`v0.3.1` ↔ `0.3.1`), then
+`python tools/publish_release.py "why this version"`. The script commits and pushes the source, rebuilds, and publishes
+tag `v<FW_VERSION_STR>` on `thethingsmaker/perceptio2.0-firmware` with `firmware.bin` attached. If the tag and
+`FW_VERSION_STR` differ the UI keeps reporting "update available".
 
 ## Remote log (`src/rlog.c`)
 

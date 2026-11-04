@@ -53,19 +53,17 @@ Working style: metric units, English or Italian, no fluff, verify against datash
 - **Switching off = ship mode, checked at the next boot.** Ship mode cannot engage with the cable in (→ CHARGE-IDLE)
   and a request can be ignored, so `power_mgr` leaves an RTC breadcrumb and falls back to deep sleep after 6 s; the boot
   report says which happened (README "Power"). Never call `bq25180_enter_ship_mode()` directly — use `power_mgr_off()`.
-- **One radio for the fallback AP and the station** (`net.c`, `netwatch.c`): both are always on the same channel and the
-  AP follows the station (the AP starts on channel 1, but the station's retries leave the radio on the last channel they
-  scanned). Scans keep returning to the AP's channel (`home_chan_dwell_time` 30 ms), so a scan does not drop a phone on
-  the AP; a JOIN on another channel moves the AP and drops it once (accepted, 0.3.42). Timings (0.3.40–0.3.43): AP after
-  90 s without backend, saved networks retried every 15 s while the AP is unused / every 30 s (all channels) with a
-  phone on it, AP off 5 s after the backend answers (30 s retries while a phone is on it), then `wifi_ps` is applied again.
+- **No access point (0.3.46, BLE line).** The fallback AP of 0.3.21–0.3.43 is gone (revert to 0.3.43 for it); phone
+  setup/control moves to BLE. `net.c` rejoins the saved list every 15 s while offline (`rejoin_task`, PSRAM stack); the
+  radio is never stopped (BLE shares it). Lesson kept from the AP: scans return to the home channel between channels
+  (`home_chan_dwell_time`), joins move the radio.
 - **Hooks called from the event-loop task only flag** (`sys_evt` has ~1.7 KB stack left): `cloud_link`, the IP-event
   path, anything registered with `net_add_link_hook`. Work goes to the owning task (cloud task: notify bits).
   Task stacks are sized from DIAG peaks with margin: `ap_retry` had 496 B left at 3072 → 4096 (0.3.39).
 - WiFi modem sleep adds 100–300 ms per HTTP request → `esp_wifi_set_ps(WIFI_PS_NONE)` while the UI is in use (parameter `wifi_ps`).
 - The web page is just a client of `/api/v1` (see `API.md`); the mobile app uses the same API. Parameters are self-describing (`GET /api/v1/schema` from `PARAM_TABLE` in `src/config.c`) — add a parameter = one table line, never hard-code keys in clients.
 - Passwords never leave the device over the API.
-- **Versioning**: every change committed to the PC bumps the patch number in `include/config.h` (`FW_VERSION_PATCH` + `FW_VERSION_STR`, kept equal) — 0.3.2, 0.3.3, … until Alberto calls 0.4.0. GitHub release tags are `v<FW_VERSION_STR>`; the OTA check compares them numerically.
+- **Versioning**: every change committed to the PC bumps the patch number in `include/config.h` (`FW_VERSION_PATCH` + `FW_VERSION_STR`, kept equal) — 0.3.2, 0.3.3, … until Alberto calls 0.4.0. GitHub release tags are `v<FW_VERSION_STR>`; the OTA check compares them numerically. Publish only with `python tools/publish_release.py "why this version"` — source push, firmware repo, tag, and the Release asset. Never by hand, and never with `res/pat.txt` (Contents: read only).
 - I2C driver and GPIO ISR service are installed from a core-1 task (`board.c`): with the I2C ISR on core 0, TLS load made transactions time out and the legacy driver's FSM reset storm tripped the interrupt watchdog. The BQ25180 charge profile (VBAT_CTRL 0x46, CHARGECTRL0/1) is written as absolute values at every boot — corrupted registers (VBATREG 3.51 V) once made it report "charging" with zero current.
 
 ## PlatformIO quirks learned here
@@ -84,7 +82,7 @@ One driver per file under `src/` with its header in `include/`: `board` (pins, b
 `net` (WiFi list join, keepalive, mDNS), `sampler` (core-1 DRDY task with sinks), `selftest` (bring-up tests on the drivers,
 `/api/v1/selftest`), `config`, `webui`. `partitions.csv`: two OTA slots, no factory app. See README for the table.
 Since refactor step 3 (0.3.28–0.3.32) `main.c` is init + a 100 ms tick, and the policies live in `button` (gestures),
-`netwatch` (fallback AP), `led_policy` (LED priority) and `power_mgr` (ON/OFF/CHARGE-IDLE, charge gate, low battery,
+`netwatch` (backend-unreachable seconds), `led_policy` (LED priority) and `power_mgr` (ON/OFF/CHARGE-IDLE, charge gate, low battery,
 boot report). Main passes them hooks (backend reachable, prepare-for-off, …), so they do not depend on cloud/store.
 
 Sensitivities come from the ST driver, never fs/32768: accel 0.488 mg/LSB @±16 g; **gyro 0.035 × FS mdps/LSB (140 @±4000)**;
@@ -128,13 +126,11 @@ prints the heap, `upload` acks carry `stats.heap_min_kb`, OTA progress lines car
 
 - Battery: on-battery operation, ship mode and low-battery shutdown verified (0.3.33/0.3.34, board …fcc). Still open:
   a full charge from a low cell (CC→CV→DONE); no battery → disable charging and show "no battery".
-- Fallback AP: done (0.3.35 LED, 0.3.39–0.3.43). BLE setup mode would remove the AP/station channel conflict for phone
-  setup (BLE hops on its own channels) — measure its internal RAM first (~123 KB free idle now).
+- BLE line (0.3.44+): NimBLE costs ~54 KB internal after the 0.3.45 trim (idle 122 -> 68 KB). Recovering RAM next
+  (own arrays to PSRAM, flash driver from ROM, FreeRTOS into flash; BLE controller in flash last), then the API tunnel.
 - Power-off: `cloud_shutdown` runs from the main task while the cloud task may still be active (possible minor race).
 - OTA task stack 7168: peak 4.8 KB (remote update with a tag lookup, 2026-11-03) → could go to ~6 KB. Step 4: feature
   on/off switches.
-- Upload/OTA capture the power-save mode when they start and restore it: one started while the AP is up restores "off"
-  even if `wifi_ps` is on (minor; `wifi_ps` defaults to off).
 - The remote log loses the text of the WiFi driver's own lines (they arrive in fragments: `wifi:W (…) wifi:W …`); a USB
   serial log shows them. Seen during rejoin attempts, harmless so far.
 - 2026-10-30: GitHub TLS handshakes failed for ~12 min (`-0x7280` peer closed / `-0x0050` reset, 13–50 s each) with WiFi,
@@ -143,6 +139,6 @@ prints the heap, `upload` acks carry `stats.heap_min_kb`, OTA progress lines car
   faults; its BQ25180 TS_CONTROL (0x0B) reads 0x0C where …fcc reads 0x00 — firmware never writes it, check the
   datasheet before relying on TS behaviour.
 - ADC calibration; BQ watchdog policy; LED brightness vs Vf.
-- Next blocks: events mirrored to NAND, cloud `configure` command, secure boot per `PADELIO40_securing_platform_procedure.md` (OTA and the AP fallback are done).
+- Next blocks: events mirrored to NAND, cloud `configure` command, secure boot per `PADELIO40_securing_platform_procedure.md` (OTA done).
 - Diagnostics added for the 2026-10-29 crash hunt stay until a few days of clean DIAG lines: end-of-stack watchpoint and trace facility (`sdkconfig.defaults`), `src/diag.c`.
 - 800 Hz adequacy ablation once labelled data exists.

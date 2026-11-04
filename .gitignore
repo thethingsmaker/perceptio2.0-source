@@ -1,5 +1,7 @@
 .pio/
 .vscode/
+__pycache__/
+*.pyc
 .cache/
 sdkconfig
 sdkconfig.old

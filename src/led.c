@@ -17,7 +17,6 @@ static const pattern_t PAT[] = {
     [LED_BOOT]         = { 0,   0,   255, BREATHE, 1.0f,  0.10f },
     [LED_OK]           = { 0,   255, 0,   BREATHE, 3.0f,  0.06f },
     [LED_BOOT_FAIL]    = { 255, 0,   0,   BLINK,   0.25f, 0.00f },
-    [LED_NET]          = { 0,   0,   255, BLINK,   0.25f, 0.00f },
     [LED_RECORDING]    = { 255, 0,   0,   BREATHE, 2.0f,  0.08f },
     [LED_CHARGING]     = { YEL,           BREATHE, 2.5f,  0.05f },
     [LED_CHARGE_FAULT] = { YEL,           BLINK,   0.25f, 0.00f },

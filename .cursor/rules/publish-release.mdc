@@ -1,0 +1,16 @@
+---
+description: Publish a Perceptio version only by running tools/publish_release.py
+alwaysApply: true
+---
+
+# Publishing a version
+
+When asked to commit, push, or release a firmware version to GitHub, run this and do nothing else by hand:
+
+```
+python tools/publish_release.py "why this version"
+```
+
+The version is already in `include/config.h` (`FW_VERSION_STR` and `FW_VERSION_PATCH` match). The argument is the one-line reason.
+
+Do not clone the firmware repo, tag, call the GitHub API, or upload `firmware.bin` yourself. Do not use `res/pat.txt` — it is read-only. The script builds, commits and pushes the source, updates `thethingsmaker/perceptio2.0-firmware`, tags `v<FW_VERSION_STR>`, and attaches `firmware.bin` to the Release.

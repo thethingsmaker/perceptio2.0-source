@@ -815,7 +815,7 @@ void cloud_link(bool up)
         /* The client is (re)created by the cloud task only. Until 0.3.29 this ran client_start() here, in the event-loop
          * task, while the cloud task could run its own reconnect (s_reconnect_due left over from the disconnect): both
          * destroyed/created s_cli at once -> InstrFetchProhibited in esp_mqtt_client_destroy (2026-10-29 15:38, board fcc,
-         * rejoining WiFi after the fallback AP). */
+         * rejoining WiFi after the fallback AP, removed in 0.3.46). */
         if (s_task) xTaskNotify(s_task, 16, eSetBits);
     } else if (up && was) {
         /* GOT_IP while the link was already up: a DHCP renewal, possibly with a new address (0.3.38). The hello carries

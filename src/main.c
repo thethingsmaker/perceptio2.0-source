@@ -135,7 +135,6 @@ static void led_update(const bq25180_status_t *bq)
         .done          = bq->chg == BQ_CHG_DONE,
         .safety_fault  = bq->safety_fault,
         .charge_paused = s_chg_paused,
-        .ap_up         = net_ap_active(),
         .net_bad       = netwatch_backend_bad_s() >= 20,   /* 20 s grace for a normal (re)connect */
     };
     led_policy_apply(&in);
@@ -166,15 +165,6 @@ static bool backend_ok(void)
     cloud_status_t cs; cloud_get_status(&cs);
     return cs.state == CLOUD_ONLINE || cs.state == CLOUD_ENROL_WAIT || cs.state == CLOUD_ENROL_REJECTED
            || (cs.state == CLOUD_OFF && net_is_connected());
-}
-static void ap_up(void) { webui_start(status_cb); }   /* webui_start is a no-op when running */
-/* AP off (0.3.43): the AP forced WiFi power save off; give the parameter back, unless an upload or an OTA job runs
- * (both keep it off for their duration and restore what they found when they end) */
-static void ap_down(void)
-{
-    bool busy = upload_active() || ota_busy();
-    if (!busy) net_set_power_save(g_cfg.wifi_ps);
-    ESP_LOGI(TAG, "fallback AP off: WiFi power save %s", busy ? "left off (upload/OTA running)" : g_cfg.wifi_ps ? "back on (wifi_ps)" : "stays off (wifi_ps)");
 }
 
 static void ota_mode_enter(void) { cloud_suspend("fw_update"); }
@@ -211,7 +201,7 @@ void app_main(void)
     bq25180_set_ichg_ma(g_cfg.ichg_ma);
     bq25180_set_ilim_ma(g_cfg.ilim_ma);
     button_init(btn_double, btn_long);            /* gestures (button.c); actions run in the main loop */
-    netwatch_init(backend_ok, ap_up, ap_down);    /* fallback AP + backend watch (netwatch.c) */
+    netwatch_init(backend_ok);                    /* backend watch for the LED (netwatch.c) */
     power_mgr_init(power_prepare, idle_board_temp);   /* OFF / CHARGE-IDLE / charge gate (power_mgr.c) */
     lp5810_init();
     lp5810_set_brightness(g_cfg.led_bright);
@@ -257,23 +247,13 @@ void app_main(void)
     webui_set_stream_hz(g_cfg.ws_hz);
     if (imu_ok) { sampler_add_sink(store_feed); sampler_add_sink(webui_feed); sampler_start(); }
 
-    if (online) {
-        net_set_power_save(g_cfg.wifi_ps);
-        net_start_mdns(g_cfg.dev_name, config_fw_version());
-        webui_start(status_cb);
-        ESP_LOGI(TAG, ">>> http://%s/ <<<  heap %u KB internal (MQTT not yet connected)", net_ip(), (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
-    } else {
-        /* No known network: own access point "Perceptio-<device id>", same UI at http://192.168.4.1/. The saved
-         * networks keep being retried in the background (net.c); joining one switches the AP off. */
-        if (netwatch_start_ap("no saved network reachable at boot") == ESP_OK) {
-            net_set_power_save(false);
-            net_start_mdns(g_cfg.dev_name, config_fw_version());
-            webui_start(status_cb);
-            ESP_LOGW(TAG, ">>> no WiFi: join 'Perceptio-%s' (password '%s') and open http://%s/ <<<", cloud_device_id(), NETWATCH_AP_PASSWORD, net_ip());
-        } else {
-            ESP_LOGE(TAG, "no WiFi and the fallback AP failed — UI not reachable");
-        }
-    }
+    /* Web UI and mDNS start in any case (they bind to the station interface whenever it gets an address); no access
+     * point since 0.3.46: without a reachable saved network, net.c retries the list every 15 s (BLE setup next). */
+    net_set_power_save(g_cfg.wifi_ps);
+    net_start_mdns(g_cfg.dev_name, config_fw_version());
+    webui_start(status_cb);
+    if (online) ESP_LOGI(TAG, ">>> http://%s/ <<<  heap %u KB internal (MQTT not yet connected)", net_ip(), (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
+    else ESP_LOGW(TAG, ">>> no saved network reachable: retrying every 15 s <<<  heap %u KB internal", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
 
     bool healthy = imu_ok && nand_ok && selftest_passed() == selftest_count();
     if (!healthy) { s_boot_fail_until = esp_timer_get_time() + 3000000; led_set(LED_BOOT_FAIL); }   /* red blink 3 s */
@@ -308,7 +288,7 @@ void app_main(void)
             else if (ss.elapsed_ms >= (uint32_t)g_cfg.session_max_min * 60000u) app_rec_stop("timeout", NULL, NULL);
         }
 
-        if (tick % 10 == 0) netwatch_tick_1s();       /* fallback AP when the backend stays unreachable (netwatch.c) */
+        if (tick % 10 == 0) netwatch_tick_1s();       /* backend-unreachable seconds for the LED (netwatch.c) */
         if (tick % 10 == 0) {                         /* battery gauge: 1 s ticks */
             bq25180_status_t b1; power_charger_status(&b1);
             power_battery_tick(b1.vin_pgood, b1.chg == BQ_CHG_CC || b1.chg == BQ_CHG_CV, b1.chg == BQ_CHG_DONE);
