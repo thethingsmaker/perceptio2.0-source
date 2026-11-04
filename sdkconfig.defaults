@@ -114,6 +114,8 @@ CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+# 0.3.53: big ATT MTU so API JSON travels in few chunks (Android asks 517)
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=512
 # 0.3.45 — bare minimum for ONE connection to ONE phone (0.3.44 measured: BLE cost 63 KB internal, idle 122 -> 59 KB).
 # Controller: 2 activities (1 advertising + 1 connection; 828 B each, default 6); no scanning, no scan-duplicate
 # cache, no direct-test mode (the racket never scans or acts as a central).
@@ -147,4 +149,10 @@ CONFIG_BT_NIMBLE_DIS_SERVICE=n
 # 0.3.50 tried CONFIG_SPI_FLASH_ROM_IMPL=y (flash driver from ROM, ~9.5 KB of IRAM): the image crashed in the main task
 # right after the first NVS write at boot (InstrFetchProhibited at pc 0x0073735e inside newlib's stdio write path,
 # 2026-11-04 23:19, board f3c; the bootloader rolled back to 0.3.49). Reverted in 0.3.51 — do not re-enable without
-# understanding that crash (core dump crc 6782d92c, ELF kept as firmware-0.3.50.elf).
+# understanding that crash (core dump crc 6782d92c, ELF kept as firmware-0.3.50.elf). Decoded: the stdout FILE object
+# (newlib __sf, .bss) was overwritten by the ROM driver's first NVS write — the ROM code wrote outside its own data.
+
+# 0.3.52 — internal RAM: FreeRTOS functions that are never called from an ISR go to flash ("up to 8 KB of IRAM", IDF).
+# ISR-callable ones stay in IRAM (the ISR variant needs flash auto-suspend, which this flash does not have). Watch the
+# sampler: its task-level FreeRTOS calls now run from cache — a recording must still show "no sampling gaps".
+CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y
