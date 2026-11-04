@@ -91,7 +91,8 @@ esp_err_t net_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
     s_down_since_us = esp_timer_get_time();           /* not joined yet */
-    task_create_psram(rejoin_task, "rejoin", 3072, NULL, 3, NULL, 0);
+    /* 4096 since 0.3.47: at 3072 a successful rejoin left 428 B (DIAG, 2026-11-04, board f3c). PSRAM: no internal cost */
+    task_create_psram(rejoin_task, "rejoin", 4096, NULL, 3, NULL, 0);
     return ESP_OK;
 }
 
