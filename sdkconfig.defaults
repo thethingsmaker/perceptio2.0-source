@@ -144,7 +144,7 @@ CONFIG_BT_NIMBLE_HR_SERVICE=n
 CONFIG_BT_NIMBLE_BAS_SERVICE=n
 CONFIG_BT_NIMBLE_DIS_SERVICE=n
 
-# 0.3.50 — internal RAM: the internal-flash driver runs from ROM instead of IRAM (~11 KB of spi_flash code was in
-# IRAM). The S3 ROM driver lacks only flash auto-suspend, which this board does not use. Quad DIO flash, not octal.
-# Changing this file: delete sdkconfig.perceptio2 before building (CLAUDE.md).
-CONFIG_SPI_FLASH_ROM_IMPL=y
+# 0.3.50 tried CONFIG_SPI_FLASH_ROM_IMPL=y (flash driver from ROM, ~9.5 KB of IRAM): the image crashed in the main task
+# right after the first NVS write at boot (InstrFetchProhibited at pc 0x0073735e inside newlib's stdio write path,
+# 2026-11-04 23:19, board f3c; the bootloader rolled back to 0.3.49). Reverted in 0.3.51 — do not re-enable without
+# understanding that crash (core dump crc 6782d92c, ELF kept as firmware-0.3.50.elf).
