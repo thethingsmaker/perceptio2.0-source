@@ -761,7 +761,9 @@ static void on_close(httpd_handle_t hd, int fd)
 
 static void ws_sender_task(void *arg)
 {
-    static uint8_t frame[4 + 64 * sizeof(webui_sample_t)];
+    /* PSRAM since 0.3.49 (1.3 KB internal before): httpd copies it into its own socket buffers */
+    uint8_t *frame = heap_caps_malloc(4 + 64 * sizeof(webui_sample_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!frame) { ESP_LOGE(TAG, "no PSRAM for the live frame"); vTaskDelete(NULL); }
     uint32_t rd = s_wr;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(s_stream_ms));

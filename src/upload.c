@@ -24,6 +24,7 @@
 static const char *TAG = "UPLOAD";
 
 #define BODY_MAX        768
+#define STATS_MAX       640
 #define MIN_CHUNK       (64 * 1024)
 #define MAX_CHUNK       (1024 * 1024)
 #define GIVE_UP_MS      (3600 * 1000)           /* token lives 6 h; stop trying after 1 h of failures */
@@ -41,7 +42,7 @@ static TaskHandle_t   s_task, s_reader;
 static job_t          s_job;
 static volatile bool  s_busy;
 static upload_status_t s_st;
-static char           s_body[BODY_MAX]; static int s_body_len;
+static char          *s_body; static int s_body_len;   /* [BODY_MAX], PSRAM since 0.3.49 (upload_init) */
 static struct {
     uint32_t chunks, connects, retries, ndrops; int64_t read_us, send_us, t0; uint64_t bytes;
     int8_t rssi; char phy[12]; drop_t drops[MAX_DROPS]; size_t heap_min;
@@ -283,18 +284,20 @@ out:
     if (!store_is_recording()) bus_state("idle");
 
     /* stats for the ack (firmware-upload-speed.md §1 + follow-up) */
-    static char stats[640];
+    static char *stats;                       /* PSRAM since 0.3.49 */
+    if (!stats) stats = heap_caps_malloc(STATS_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!stats) { if (fail) s_done(s_job.cmd_id, false, fail, NULL, NULL); else s_done(s_job.cmd_id, true, NULL, result, NULL); return; }
     int64_t total_ms = (esp_timer_get_time() - s_stats.t0) / 1000;
-    int n = snprintf(stats, sizeof stats,
+    int n = snprintf(stats, STATS_MAX,
         "{\"chunks\":%" PRIu32 ",\"bytes\":%llu,\"total_ms\":%lld,\"read_ms\":%lld,\"send_ms\":%lld,\"connects\":%" PRIu32 ",\"retries\":%" PRIu32
         ",\"rssi\":%d,\"phy\":\"%s\",\"heap_min_kb\":%u,\"tcp_snd_buf\":%d,\"tls_out\":%d,\"drops\":[",
         s_stats.chunks, (unsigned long long)s_stats.bytes, (long long)total_ms, (long long)(s_stats.read_us / 1000), (long long)(s_stats.send_us / 1000),
         s_stats.connects, s_stats.retries, s_stats.rssi, s_stats.phy, (unsigned)(s_stats.heap_min >> 10),
         CONFIG_LWIP_TCP_SND_BUF_DEFAULT, CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN);
-    for (uint32_t i = 0; i < s_stats.ndrops && i < MAX_DROPS && n < (int)sizeof stats - 80; i++)
-        n += snprintf(stats + n, sizeof stats - n, "%s{\"offset\":%" PRIu32 ",\"step\":\"%s\",\"err\":\"%s\",\"errno\":%d,\"rssi\":%d}",
+    for (uint32_t i = 0; i < s_stats.ndrops && i < MAX_DROPS && n < STATS_MAX - 80; i++)
+        n += snprintf(stats + n, STATS_MAX - n, "%s{\"offset\":%" PRIu32 ",\"step\":\"%s\",\"err\":\"%s\",\"errno\":%d,\"rssi\":%d}",
                       i ? "," : "", s_stats.drops[i].offset, s_stats.drops[i].step, s_stats.drops[i].err, s_stats.drops[i].errno_, s_stats.drops[i].rssi);
-    snprintf(stats + n, sizeof stats - n, "]}");
+    snprintf(stats + n, STATS_MAX - n, "]}");
     ESP_LOGI(TAG, "%s: %s — ps restored to %d, stats %s", s_job.rec_id, fail ? fail : "done", (int)ps_prev, stats);
     if (fail) s_done(s_job.cmd_id, false, fail, NULL, stats);
     else s_done(s_job.cmd_id, true, NULL, result, stats);
@@ -315,6 +318,8 @@ esp_err_t upload_init(upload_done_fn done, const char *device_id)
 {
     strlcpy(s_devid, device_id ? device_id : "?", sizeof s_devid);
     s_done = done;
+    s_body = heap_caps_calloc(BODY_MAX, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);   /* 0.3.49: was a static internal array */
+    if (!s_body) return ESP_ERR_NO_MEM;
     /* the effective build values that decide upload throughput — compare with docs/firmware-upload-speed.md §2 */
 #if defined(CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM)
     const char *txb = "dynamic"; int txn = CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM;

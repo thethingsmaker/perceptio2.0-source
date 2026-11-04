@@ -44,9 +44,11 @@ static char      s_devid[16];
 static uint32_t  s_boot_id;
 static uint8_t   s_rec_n;                   /* per-boot counter */
 static bool      s_nand_ok;
-static store_rec_t s_rec[MAX_REC];
-static uint8_t   s_map[NAND_BLOCKS];        /* block -> inventory slot / FREE / BAD */
-static uint16_t  s_ord[NAND_BLOCKS];        /* block -> ordinal within its recording (page/64) */
+/* Inventory in PSRAM since 0.3.49 (10 KB of internal .bss before): only tasks touch it (no ISR), the NAND is external
+ * SPI (its writes never disable the cache), and nothing here runs during an internal-flash operation. */
+static store_rec_t *s_rec;                  /* [MAX_REC] */
+static uint8_t     *s_map;                  /* [NAND_BLOCKS] block -> inventory slot / FREE / BAD */
+static uint16_t    *s_ord;                  /* [NAND_BLOCKS] block -> ordinal within its recording (page/64) */
 static SemaphoreHandle_t s_ctl;             /* serialises control calls (core 0) */
 static store_event_fn s_hook;
 
@@ -536,7 +538,7 @@ static int last_written_page(uint16_t blk, store_page_hdr_t *out)   /* pages are
 static void scan(void)
 {
     int64_t t0 = esp_timer_get_time();
-    memset(s_map, MAP_FREE, sizeof s_map);
+    memset(s_map, MAP_FREE, NAND_BLOCKS);
     for (int b = 0; b < NAND_BLOCKS; b++) if (b < STORE_FIRST_BLK || b > STORE_LAST_BLK) s_map[b] = MAP_BAD;   /* reserved */
     for (int b = STORE_FIRST_BLK; b <= STORE_LAST_BLK; b++) {
         if (nand_block_is_bad(b)) { s_map[b] = MAP_BAD; continue; }
@@ -710,7 +712,11 @@ esp_err_t store_init(const char *device_id, uint32_t boot_id, bool nand_ok)
     strncpy(s_devid, device_id, sizeof s_devid - 1);
     s_boot_id = boot_id; s_nand_ok = nand_ok;
     s_ctl = xSemaphoreCreateMutex();
-    memset(s_map, MAP_BAD, sizeof s_map);
+    s_rec = heap_caps_calloc(MAX_REC, sizeof *s_rec, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_map = heap_caps_malloc(NAND_BLOCKS, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_ord = heap_caps_calloc(NAND_BLOCKS, sizeof *s_ord, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_rec || !s_map || !s_ord) { ESP_LOGE(TAG, "no PSRAM for the inventory: recording disabled"); s_nand_ok = false; return ESP_FAIL; }
+    memset(s_map, MAP_BAD, NAND_BLOCKS);
     if (esp_rom_crc32_le(0, (const uint8_t *)"123456789", 9) != 0xCBF43926) ESP_LOGE(TAG, "CRC-32 self-test FAILED");   /* data-v2 §1.2 */
     if (!nand_ok) { ESP_LOGE(TAG, "NAND not available: recording disabled"); return ESP_FAIL; }
     s_ring = heap_caps_malloc(RING_BLOCKS * sizeof(raw_blk_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
