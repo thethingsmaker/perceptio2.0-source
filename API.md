@@ -34,7 +34,7 @@ Schema entry:
 - `reboot`: `true` → saved now, applied at next boot (show a "restart to apply" hint); `false` → applied immediately
 - Values are persisted in NVS on the device. **Writes are refused during a capture session** in the production firmware (HTTP 409) — the app should retry after the session ends.
 
-Current parameters: `dev_name, odr_hz, xl_fs_g, gy_fs_dps, hg_fs_g, session_max, auto_upload, led_bright, wifi_ps, ws_hz`.
+Current parameters: `dev_name, odr_hz, xl_fs_g, gy_fs_dps, hg_fs_g, session_max, led_bright, wifi_ps, ws_hz, selftest, selftest_full, ichg_ma, ilim_ma, chg_tmax_c`. (`auto_upload` removed in 0.3.58: uploads are commanded by the backend on `rec_stopped`; the flag was not read by anything.)
 
 ## WiFi networks
 

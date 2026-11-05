@@ -20,8 +20,8 @@
 
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 3
-#define FW_VERSION_PATCH 57
-#define FW_VERSION_STR   "0.3.57"
+#define FW_VERSION_PATCH 58
+#define FW_VERSION_STR   "0.3.58"
 
 /* ------------------------------------------------------------------ */
 /* WiFi list                                                           */
@@ -70,7 +70,6 @@ typedef struct {
     bool    wifi_ps;         /* modem power save when idle */
     int32_t ws_hz;           /* live-stream flush rate to browsers */
     int32_t session_max_min; /* auto-stop a session after N minutes */
-    bool    auto_upload;     /* upload sessions when WiFi is available */
     bool    selftest_boot;   /* run the quick self-test at every boot */
     bool    selftest_full;   /* + NAND stress and button wait (slow) */
     int32_t ichg_ma;         /* charge current while the device is ON (linear charger: heat!) */
