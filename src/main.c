@@ -224,7 +224,7 @@ void app_main(void)
     bool nand_ok = nand_init(40 * 1000 * 1000) == ESP_OK;
     ESP_LOGI(TAG, "heap after drivers: %u KB internal", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
     net_init();
-    factory_boot_check();                         /* ~4 s after a button power-on: button still held -> reset gesture (factory.c) */
+    factory_boot_check();                         /* button power-on: a new press now (LED blue) -> reset gesture (factory.c) */
     ESP_LOGI(TAG, "heap after wifi init: %u KB internal", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
     cloud_init(cloud_info_cb);                    /* identity, boot_id++, buffered boot event; connects when the link is up */
     net_add_link_hook(clock_link);                /* NTP on every got-IP (first, as before) */
@@ -243,7 +243,6 @@ void app_main(void)
         selftest_run(ST_SOC, 0);                  /* always know what we booted on */
     }
 
-    factory_boot_check();                         /* second look, after the self-test */
     bool online = net_connect_from_list(12000) == ESP_OK;
     ESP_LOGI(TAG, "heap after wifi join: %u KB internal", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
 
@@ -267,7 +266,6 @@ void app_main(void)
 
     /* idle (100 ms tick): green heartbeat = healthy, red fast blink = fault; charger line every 2 s; button handling */
     uint32_t tick = 0;
-    factory_boot_check();                         /* last look (a long boot: the flags are latched in the charger) */
     (void)button_take();                          /* discard presses during boot */
     for (;;) {
         button_tick();                            /* double press -> start/stop recording, hold 3 s -> off (button.c) */

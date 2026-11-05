@@ -62,10 +62,11 @@ Working style: metric units, English or Italian, no fluff, verify against datash
   (bond write) is refused while recording. Policy: pairing only while no bond exists and within 10 min of power-on; a
   foreign phone is disconnected in the CONNECT event; factory reset (gesture TBD) or `POST /api/v1/ble/unpair` re-opens.
 - **Factory reset (0.3.59, `factory.c`)** runs only on the main task (NVS + NAND erase, cloud flush): the cloud command
-  queues it (`factory_request` → `factory_tick`), the button gesture runs it from the boot sequence. The gesture is "button
-  still held when a button-woken boot reads WAKE2, then one confirming short press": the MCU never sees the button level,
-  only the charger's WAKE1/WAKE2 flags, and the charger's own long-press cut (`MR_LPRESS`, now 10 s, was 5 s) ships the
-  board — a literal "hold 10 s" is impossible. `config_factory_reset` erases key by key: `ota_pat` shares the `cfg`
+  queues it (`factory_request` → `factory_tick`), the button gesture runs it from the boot sequence. The gesture is "switch on, then
+  when the LED is blue press and hold (WAKE2), then one confirming short press": the MCU never sees the button level, only
+  the charger's WAKE1/WAKE2 flags; the charger sets NO flags for the press that woke it from ship mode (measured: an 8 s
+  hold through the boot gave nothing), and its own long-press cut (`MR_LPRESS`, now 10 s, was 5 s) ships the board — a
+  literal "hold 10 s" is impossible. The check runs once, ≤ 1.2 s after the blue LED; earlier presses are ignored. `config_factory_reset` erases key by key: `ota_pat` shares the `cfg`
   namespace and must survive.
 - **No access point (0.3.46, BLE line).** The fallback AP of 0.3.21–0.3.43 is gone (revert to 0.3.43 for it); phone
   setup/control moves to BLE. `net.c` rejoins the saved list every 15 s while offline (`rejoin_task`, PSRAM stack); the

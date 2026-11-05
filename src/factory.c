@@ -77,13 +77,25 @@ void factory_tick(void)
     execute(s_scope, s_force, s_by, s_cmd);
 }
 
+/* The charger sets no WAKE flags for the press that woke it from ship mode (0.3.59 test: an 8 s hold through the boot
+ * produced nothing), so the gesture needs a FRESH press: once the LED is blue, press and hold. We wait ≤ 1.2 s for that
+ * press to show (WAKE1), then up to 3.5 s more for WAKE2. A normal power-on pays ≤ 1.2 s. Anything pressed earlier
+ * than this window is deliberately ignored (a normal boot): arming later would collide with the charger's 10 s cut. */
 void factory_boot_check(void)
 {
     if (s_boot_done || !power_mgr_button_boot()) return;
-    power_btn_t k = button_take();
-    if (k != BTN_LONG) return;                                    /* a short press (the power-on tap) stays irrelevant */
     s_boot_done = true;
-    ESP_LOGW(TAG, "button held through the boot: factory reset ARMED — release, then press once within %d s to confirm", CONFIRM_MS / 1000);
+    (void)button_take();                                          /* flags of the power-on press itself */
+    int64_t deadline = esp_timer_get_time() + 1200 * 1000;
+    power_btn_t k = 0;
+    while (esp_timer_get_time() < deadline) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        k = button_take();
+        if (k == BTN_LONG) break;
+        if (k == BTN_SHORT) { ESP_LOGI(TAG, "button pressed after power-on: waiting for the 3 s hold"); deadline = esp_timer_get_time() + 3500 * 1000; }
+    }
+    if (k != BTN_LONG) return;
+    ESP_LOGW(TAG, "button held after power-on: factory reset ARMED — release, then press once within %d s to confirm", CONFIRM_MS / 1000);
     led_identify(CONFIRM_MS / 1000 + 1);                          /* white fast blink */
     int64_t until = esp_timer_get_time() + (int64_t)CONFIRM_MS * 1000;
     while (esp_timer_get_time() < until) {
