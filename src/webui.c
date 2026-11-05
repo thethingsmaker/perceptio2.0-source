@@ -514,9 +514,10 @@ static esp_err_t h_favicon(httpd_req_t *r)
 
 static esp_err_t h_reboot(httpd_req_t *r)
 {
+    const char *by = origin(r);                        /* before the answer: sending reuses the request-header buffer */
     cors(r);
     httpd_resp_sendstr(r, "{\"ok\":true}");
-    app_reboot(origin(r));                             /* does not return */
+    app_reboot(by);                                    /* does not return */
     return ESP_OK;
 }
 
@@ -524,13 +525,14 @@ static esp_err_t h_reboot(httpd_req_t *r)
  * CHARGE-IDLE (UI gone), on battery it enters ship mode. */
 static esp_err_t h_power_off(httpd_req_t *r)
 {
+    const char *by = origin(r);                        /* before the answer: sending reuses the request-header buffer */
     cors(r);
     bq25180_status_t bq; power_charger_status(&bq);
     char out[96];
     snprintf(out, sizeof out, "{\"ok\":true,\"mode\":\"%s\",\"recording_closed\":%s}",
              bq.vin_pgood ? "charge_idle" : "ship", store_is_recording() ? "true" : "false");
     httpd_resp_sendstr(r, out);
-    app_power_off(origin(r));
+    app_power_off(by);
     return ESP_OK;
 }
 
