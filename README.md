@@ -76,7 +76,8 @@ page stays for the lab. NimBLE peripheral, controller and host on core 0, host m
   enrolment and the OTA token, publishes `factory_reset {scope, by, cmd_id, recording_closed}`, tells the backend and
   reboots (offline until a phone sets it up again). Refused while recording/uploading/updating unless `force`. Offline:
   from OFF with the cable out, switch on with the button; **when the LED turns blue, press and hold again** until it
-  blinks **white** (~3 s); release, then **one short press within 6 s** → full reset (reboot). No press → normal boot,
+  blinks **white** (~3 s); release, then **press again for about a second** (a quick tap is not seen: the charger flags
+  presses ≥ 0.3 s) **within 8 s** → full reset (reboot). No press → normal boot,
   nothing changed. Why the second press: the charger sets no WAKE flags for the press that woke it from ship mode, and
   the MCU cannot read the button level. A button power-on costs ≤ 1.2 s of waiting. The charger's hardware long-press
   cut is 10 s (was 5 s); holding that long = ship mode, nothing changed. `hello` and `state` carry `ble_bonded`.

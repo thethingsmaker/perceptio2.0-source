@@ -4,8 +4,8 @@
  *   backend command  factory_reset {scope: "pairing"|"all", force}   -> factory_request() from the cloud task, served
  *                    by factory_tick() in the main loop (like app_request_power_off).
  *   button, offline  from OFF (cable out): switch on with the button; when the LED turns blue (~2.5 s) press and HOLD
- *                    again; at 3 s (WAKE2) the LED blinks white ("armed"); release, then ONE short press within 6 s
- *                    confirms -> scope all. No press -> normal boot, nothing changed. The MCU never sees the button
+ *                    again; at 3 s (WAKE2) the LED blinks white ("armed"); release, then press again for about a
+ *                    second (>= 0.3 s: a quick tap sets no flag) within 8 s -> scope all. No press -> normal boot, nothing changed. The MCU never sees the button
  *                    level, only the charger's WAKE1 (0.3 s) / WAKE2 (3 s) flags, and the charger sets none for the
  *                    press that woke it from ship mode — hence the second press. Its hardware long-press cut
  *                    (MR_LPRESS) is 10 s: holding that long = ship mode, nothing changed.

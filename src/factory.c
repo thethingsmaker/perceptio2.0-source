@@ -18,7 +18,7 @@
 #include "freertos/task.h"
 
 static const char *TAG = "FACTORY";
-#define CONFIRM_MS 6000
+#define CONFIRM_MS 8000
 
 static volatile bool s_pending;
 static factory_scope_t s_scope;
@@ -95,14 +95,13 @@ void factory_boot_check(void)
         if (k == BTN_SHORT) { ESP_LOGI(TAG, "button pressed after power-on: waiting for the 3 s hold"); deadline = esp_timer_get_time() + 3500 * 1000; }
     }
     if (k != BTN_LONG) return;
-    ESP_LOGW(TAG, "button held after power-on: factory reset ARMED — release, then press once within %d s to confirm", CONFIRM_MS / 1000);
+    ESP_LOGW(TAG, "button held after power-on: factory reset ARMED — release, then press again (>= 0.3 s) within %d s to confirm", CONFIRM_MS / 1000);
     led_identify(CONFIRM_MS / 1000 + 1);                          /* white fast blink */
     int64_t until = esp_timer_get_time() + (int64_t)CONFIRM_MS * 1000;
     while (esp_timer_get_time() < until) {
         vTaskDelay(pdMS_TO_TICKS(100));
-        power_btn_t c = button_take();
-        if (c == BTN_SHORT) { ESP_LOGW(TAG, "confirmed"); execute(FACTORY_ALL, true, "button", ""); return; }   /* does not return */
-        if (c == BTN_LONG) break;                                 /* held again: not a confirmation */
+        /* any press the charger flags (>= 0.3 s; a quick tap sets no flag — 0.3.60 test) confirms, held or not */
+        if (button_take()) { ESP_LOGW(TAG, "confirmed"); execute(FACTORY_ALL, true, "button", ""); return; }   /* does not return */
     }
     ESP_LOGW(TAG, "not confirmed: normal boot");
     led_set(LED_BOOT);
