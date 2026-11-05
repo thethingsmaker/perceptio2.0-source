@@ -115,14 +115,25 @@ static int http_loopback(const char *method, const char *path, const char *body,
     int hn = snprintf(hdr, sizeof hdr, "%s %s HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nX-Transport: ble\r\n%s%s%zu\r\n\r\n",
                       method, path, blen ? "Content-Type: application/json\r\n" : "", "Content-Length: ", blen);
     if (send(fd, hdr, hn, 0) < 0 || (blen && send(fd, body, blen, 0) < 0)) { close(fd); return -3; }
-    /* read everything (Connection: close), then split headers / body */
-    size_t got = 0; int r;
-    while (got < out_max - 1 && (r = recv(fd, out + got, out_max - 1 - got, 0)) > 0) got += r;
+    /* Read the headers, then exactly Content-Length bytes: esp_http_server ignores "Connection: close" and keeps the
+     * socket open, so reading until EOF would wait the full receive timeout on every request (0.3.54). Replies
+     * without Content-Length (chunked: the file downloads, excluded over BLE) are read until close/timeout. */
+    size_t got = 0, want = 0; int r; char *sep = NULL;
+    while (got < out_max - 1 && (r = recv(fd, out + got, out_max - 1 - got, 0)) > 0) {
+        got += r; out[got] = 0;
+        if (!sep) {
+            sep = strstr(out, "\r\n\r\n");
+            if (!sep) continue;
+            const char *cl = strcasestr(out, "\r\nContent-Length:");
+            if (!cl || cl > sep) continue;                  /* no length: read to close */
+            want = (size_t)(sep + 4 - out) + strtoul(cl + 17, NULL, 10);
+        }
+        if (want && got >= want) break;
+    }
     close(fd);
     out[got] = 0;
     if (got < 12 || strncmp(out, "HTTP/1.", 7) != 0) return -4;
     int status = atoi(out + 9);
-    char *sep = strstr(out, "\r\n\r\n");
     if (!sep) return -5;
     *json = strstr(out, "application/json") != NULL && strstr(out, "application/json") < sep;
     memmove(out, sep + 4, got - (sep + 4 - out) + 1);   /* body to the front */
