@@ -56,6 +56,7 @@ void power_mgr_off(const char *why)
     }
 }
 
+static bool s_button_boot;
 void power_mgr_boot(bool plugged)
 {
     bool fell_back   = s_rtc_magic == PM_MAGIC && s_rtc_state == PM_FALLBACK;
@@ -76,7 +77,9 @@ void power_mgr_boot(bool plugged)
         enter_off(600);
     }
     config_user_off_set(false);                       /* woken by the button (from ship mode or deep sleep): turn on */
+    s_button_boot = true;
 }
+bool power_mgr_button_boot(void) { return s_button_boot; }
 
 bool power_mgr_charge_gate(float board_c)
 {

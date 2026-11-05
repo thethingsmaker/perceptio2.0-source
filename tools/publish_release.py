@@ -11,7 +11,10 @@ Reads FW_VERSION_STR from include/config.h (already bumped). Then, in order:
   4. Commit firmware.bin, bootloader.bin, partitions.bin, ota_data_initial.bin
      and manifest.json to perceptio2.0-firmware, push, tag v<version>.
   5. Create the GitHub Release and upload firmware.bin (the only .bin asset;
-     OTA uses the first asset whose name ends in .bin).
+     OTA uses the first asset whose name ends in .bin) and firmware-<version>.elf
+     (needed to decode a core dump of that build: esp-coredump checks the app
+     SHA256, a rebuilt ELF will not do). The ELF is also kept locally in
+     res/elf/ (git-ignored).
 
 Git credentials do the push and the release. res/pat.txt is Contents:read only
 and cannot create a release. Do not pass target_commitish: a short SHA is a 422.
@@ -122,6 +125,18 @@ def build() -> Path:
     return image
 
 
+def archive_elf(version: str) -> Path:
+    """Keep this build's ELF next to the sources: res/elf/firmware-<version>.elf (git-ignored)."""
+    src = ROOT / ".pio" / "build" / "perceptio2" / "firmware.elf"
+    if not src.is_file():
+        sys.exit(f"missing {src}")
+    dest = ROOT / "res" / "elf" / f"firmware-{version}.elf"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dest)
+    print(f"elf archived: {dest.relative_to(ROOT)}")
+    return dest
+
+
 def assert_image_version(image: Path, version: str) -> None:
     if version.encode("ascii") not in image.read_bytes():
         sys.exit(f"{image} does not contain {version}")
@@ -220,9 +235,9 @@ def release_record(token: str, version: str) -> dict | None:
     return body
 
 
-def asset_ok(record: dict, size: int) -> bool:
+def asset_ok(record: dict, size: int, name: str = "firmware.bin") -> bool:
     for asset in record.get("assets") or []:
-        if asset.get("name") == "firmware.bin" and asset.get("size") == size and asset.get("state") == "uploaded":
+        if asset.get("name") == name and asset.get("size") == size and asset.get("state") == "uploaded":
             return True
     return False
 
@@ -245,24 +260,27 @@ def create_release(token: str, version: str, summary: str, source: str) -> dict:
     return record
 
 
-def upload_firmware(token: str, release_id: int, image: Path) -> None:
-    url = f"https://uploads.github.com/repos/{FIRMWARE_SLUG}/releases/{release_id}/assets?name=firmware.bin"
-    status, record = api("POST", url, token, image.read_bytes(), "application/octet-stream")
+def upload_asset(token: str, release_id: int, path: Path, name: str) -> None:
+    url = f"https://uploads.github.com/repos/{FIRMWARE_SLUG}/releases/{release_id}/assets?name={name}"
+    status, record = api("POST", url, token, path.read_bytes(), "application/octet-stream")
     if status not in (200, 201) or not isinstance(record, dict):
-        sys.exit(f"uploading firmware.bin failed ({status}): {record}")
-    print(f"asset firmware.bin {record.get('size')} bytes")
+        sys.exit(f"uploading {name} failed ({status}): {record}")
+    print(f"asset {name} {record.get('size')} bytes")
 
 
-def publish_release(version: str, summary: str, source: str, image: Path, token: str) -> None:
+def publish_release(version: str, summary: str, source: str, image: Path, elf: Path, token: str) -> None:
+    elf_name = f"firmware-{version}.elf"
     record = release_record(token, version)
-    if record and asset_ok(record, image.stat().st_size):
+    if record and asset_ok(record, image.stat().st_size) and asset_ok(record, elf.stat().st_size, elf_name):
         print(record.get("html_url") or f"v{version} already published")
         return
     if record is None:
         print(f"release v{version}")
         record = create_release(token, version, summary, source)
     if not asset_ok(record, image.stat().st_size):
-        upload_firmware(token, int(record["id"]), image)
+        upload_asset(token, int(record["id"]), image, "firmware.bin")
+    if not asset_ok(record, elf.stat().st_size, elf_name):
+        upload_asset(token, int(record["id"]), elf, elf_name)
     print(record.get("html_url") or release_url(version))
 
 
@@ -317,7 +335,7 @@ def write_manifest(dest: Path, version: str, source: str, built: Path) -> None:
     dest.joinpath("manifest.json").write_text(text, encoding="utf-8", newline="\n")
 
 
-def publish_firmware_repo(version: str, source: str, token: str, summary: str) -> None:
+def publish_firmware_repo(version: str, source: str, token: str, summary: str, elf: Path) -> None:
     cache = ROOT / ".cache" / "perceptio2.0-firmware"
     print("firmware repo")
     firmware_checkout(cache)
@@ -334,7 +352,7 @@ def publish_firmware_repo(version: str, source: str, token: str, summary: str) -
     if tag_sha(version) is None:
         git(["tag", f"v{version}"], cwd=cache)
         git(["push", "origin", f"v{version}"], cwd=cache)
-    publish_release(version, summary, source, build_dir / "firmware.bin", token)
+    publish_release(version, summary, source, build_dir / "firmware.bin", elf, token)
 
 
 def already_published(version: str, token: str) -> bool:
@@ -365,9 +383,10 @@ def main() -> None:
         return
     image = build()
     assert_image_version(image, version)
+    elf = archive_elf(version)
     commit_source(version, summary)
     source = push_source()
-    publish_firmware_repo(version, source, token, summary)
+    publish_firmware_repo(version, source, token, summary, elf)
 
 
 if __name__ == "__main__":

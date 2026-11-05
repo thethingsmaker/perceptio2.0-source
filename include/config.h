@@ -20,8 +20,8 @@
 
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 3
-#define FW_VERSION_PATCH 58
-#define FW_VERSION_STR   "0.3.58"
+#define FW_VERSION_PATCH 59
+#define FW_VERSION_STR   "0.3.59"
 
 /* ------------------------------------------------------------------ */
 /* WiFi list                                                           */
@@ -113,7 +113,7 @@ esp_err_t config_wifi_prefer(const char *ssid);   /* move to the top of the list
 void      config_wifi_clear(void);
 esp_err_t config_wifi_save(void);
 
-esp_err_t config_factory_reset(void);
+esp_err_t config_factory_reset(void);   /* parameters + WiFi list + user_off erased; OTA token kept; reboot after */
 
 /* Capture-session lock: while true every NVS write (parameters, WiFi list) is refused with
  * ESP_ERR_INVALID_STATE — nothing touches the internal flash during a recording. */

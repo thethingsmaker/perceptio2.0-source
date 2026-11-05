@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <inttypes.h>
 #include "cloud.h"
+#include "ble.h"
+#include "factory.h"
 #include "bus.h"
 #include "app.h"
 #include "cloud_secrets.h"
@@ -162,6 +164,7 @@ static void publish_state(void)
     if (s_state_since_ms) cJSON_AddNumberToObject(j, "since_utc_ms", (double)s_state_since_ms); else cJSON_AddNullToObject(j, "since_utc_ms");
     cJSON_AddNumberToObject(j, "boot_id", s_boot_id);
     cJSON_AddNumberToObject(j, "seq", s_seq);
+    { ble_status_t b; ble_status(&b); cJSON_AddBoolToObject(j, "ble_bonded", b.bonded); }
     pub_json(topic("state"), j, 1, true);
 }
 
@@ -178,6 +181,7 @@ static void publish_hello(void)
     cJSON_AddStringToObject(j, "build", __DATE__ " " __TIME__);
     cJSON_AddNumberToObject(j, "boot_id", s_boot_id);
     cJSON_AddStringToObject(j, "reset_reason", reset_reason_name());
+    { ble_status_t b; ble_status(&b); cJSON_AddBoolToObject(j, "ble_bonded", b.bonded); }   /* a phone holds the bond (0.3.59) */
     cJSON_AddNumberToObject(j, "uptime_s", (double)(esp_timer_get_time() / 1000000));
     cJSON *c = cJSON_AddObjectToObject(j, "clock");
     cJSON_AddNumberToObject(c, "utc_ms", (double)clock_utc_ms());
@@ -505,6 +509,17 @@ static void handle_cmd(const char *payload, int len)
         }
         if (why) { hist_put(id->valuestring, "rejected", why); ack(id->valuestring, "rejected", why, NULL); }
         else hist_put(id->valuestring, "received", NULL);   /* final ack from fw_update_answer (OTA task) */
+    } else if (strcmp(cmd->valuestring, "factory_reset") == 0) {
+        const cJSON *sc = args ? cJSON_GetObjectItem(args, "scope") : NULL;
+        const cJSON *frc = args ? cJSON_GetObjectItem(args, "force") : NULL;
+        const char *why = NULL; factory_scope_t scope = FACTORY_ALL;
+        if (sc && !cJSON_IsString(sc)) why = "bad_args";
+        else if (cJSON_IsString(sc) && strcmp(sc->valuestring, "pairing") == 0) scope = FACTORY_PAIRING;
+        else if (cJSON_IsString(sc) && strcmp(sc->valuestring, "all") != 0) why = "bad_args";
+        if (!why && frc && !cJSON_IsBool(frc)) why = "bad_args";
+        if (!why && factory_request(scope, cJSON_IsTrue(frc), "cloud", id->valuestring) != ESP_OK) why = "busy";
+        if (why) { hist_put(id->valuestring, "rejected", why); ack(id->valuestring, "rejected", why, NULL); }
+        else { hist_put(id->valuestring, "applied", NULL); ack(id->valuestring, "applied", NULL, NULL); }   /* the main loop erases next */
     } else if (strcmp(cmd->valuestring, "reboot") == 0) {
         hist_put(id->valuestring, "applied", NULL); ack(id->valuestring, "applied", NULL, NULL);
         app_reboot("cloud");                                 /* waits 1 s for the PUBACK; now also confirms a fresh OTA image */

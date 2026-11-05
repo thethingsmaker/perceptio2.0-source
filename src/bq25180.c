@@ -84,10 +84,11 @@ esp_err_t bq25180_init(void)
 
     bq25180_set_ichg_ma(300);                   /* overridden from g_cfg.ichg_ma by main; linear charger -> keep heat down */
 
-    /* TMR_ILIM[7:6] MR_LPRESS: 00 = 5 s (default 01 = 10 s). Long press -> PB_LPRESS_ACTION (ship mode).
-     * The WAKE2 flag arrives at ~2-3 s so firmware has time to close a session before the 5 s cut. */
+    /* TMR_ILIM[7:6] MR_LPRESS = 01: 10 s. Long press -> PB_LPRESS_ACTION (ship mode) is the hardware safety net for a
+     * hung firmware; the normal power-off is the firmware's at WAKE2 (3 s). 5 s until 0.3.58; 10 s so that the
+     * factory-reset hold (button kept pressed through a boot, factory.c) is not cut by the charger. */
     uint8_t tl = 0; bq25180_read(BQ25180_TMR_ILIM, &tl);
-    bq25180_write(BQ25180_TMR_ILIM, tl & 0x3F);
+    bq25180_write(BQ25180_TMR_ILIM, (tl & 0x3F) | 0x40);
 
     /* SHIP_RST written as an absolute value: EN_RST_SHIP = 00 (this CANCELS any ship/shutdown request still
      * pending from a previous long press while VIN was present — re-issuing it blocked the push button),

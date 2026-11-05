@@ -9,6 +9,7 @@ src/imu.c           LSM6DSV320X via the ST driver (components/lsm6dsv320x), burs
 src/w25n01kv.c      NAND: init + bad-block scan, erase/program/read with ECC status
 src/power.c         VBAT (eFuse-calibrated ADC), BQ /INT -> button hook
 src/button.c        button gestures: double press -> start/stop recording, hold 3 s -> power off
+src/factory.c       factory reset: backend command, or button held through a power-on + confirmation press
 src/power_mgr.c     power states (ON / OFF = ship mode / CHARGE-IDLE), charge gate, low-battery shutdown, boot report
 src/netwatch.c      backend watch: seconds the backend has been unreachable (LED)
 src/led_policy.c    status LED priority list (see LED)
@@ -20,6 +21,7 @@ src/upload.c        resumable HTTPS upload of a recording, driven by the backend
 src/selftest.c      the bring-up tests on top of the drivers; results on /api/v1/selftest
 src/config.c        NVS + self-describing parameter registry
 src/webui.c         REST /api/v1 + WebSocket + embedded page (src/web_index.c from web/index.html)
+src/ble.c           BLE (NimBLE): advertising, one bonded phone, /api/v1 tunnel over GATT (docs/ble-v1.md)
 partitions.csv      nvs, otadata, phy, ota_0 (1.875 MB), ota_1 (1.875 MB), coredump
 ```
 
@@ -46,13 +48,41 @@ After the tests, if a saved network was joined, the board stays connected and st
 - mDNS: `http://<device-name>.local/` and service `_perceptio._tcp` for app discovery (component
   `espressif/mdns`, pulled by `src/idf_component.yml` on first build — needs internet once).
 
-**No access point since 0.3.46** (BLE line: phone setup and control move to BLE, `src/ble.c`; the last version with
+**No access point since 0.3.46** (BLE line: phone setup and control move to BLE, see below; the last version with
 the fallback AP is 0.3.43). Without a reachable saved network, or after losing it for 15 s, `net.c` walks the saved
 list again every 15 s ("offline for N s: retrying saved networks"); the web app and mDNS run whenever the station has an
 address.
 
 The page works on phones (bottom tab bar), follows the system dark/light theme, and needs no internet.
 Tabs: Dashboard · Live (60 fps plots) · Settings (generated from the schema) · Network.
+
+### BLE (`src/ble.c`, 0.3.44+, spec in `docs/ble-v1.md`)
+
+The Android app (`C:\PadelSense\perceptio`, Kotlin/Compose) talks to the racket over BLE instead of the LAN; the web
+page stays for the lab. NimBLE peripheral, controller and host on core 0, host memory in PSRAM, one connection, one bond.
+- **Advertising** `Perceptio-<device_id>` every 500 ms with the service UUID `7e2c0001-…` in the scan response.
+- **Tunnel** (0.3.53): the phone writes a JSON request `{"id","m","p","b"}` to REQ (`…0002`) in chunks of MTU−4 bytes
+  behind a frame byte (bit 7 = last, bits 6..0 = sequence); the racket replays it to its own HTTP server on
+  127.0.0.1 (`X-Transport: ble`, read up to `Content-Length` — esp_http_server ignores `Connection: close`) and notifies
+  `{"id","s","b"}` on RSP (`…0003`) the same way. Preferred ATT MTU 512 → 508 B chunks; ~100–300 ms per request. File
+  downloads, the core dump and `/ws` are not tunnelled. Tunnel requests are attributed to `app` in events (0.3.57).
+- **Pairing** (0.3.55): LE Secure Connections, Just Works, bond in NVS (`CONFIG_BT_NIMBLE_NVS_PERSIST`). The racket
+  starts encryption itself right after a connection. No bond + first 10 min after power-on → pairs with whoever connects
+  (the unboxing window); otherwise an unpaired or foreign phone is disconnected at once. A factory reset — or the hook
+  `POST /api/v1/ble/unpair` — is the only way to pair another phone. Pairing is refused while recording (NVS write);
+  subscriptions are deliberately not persisted (no NVS write when the phone subscribes). `GET /api/v1/ble` shows the state.
+- **Factory reset** (0.3.59, `src/factory.c`): backend command `factory_reset {scope, force}` — `pairing` erases the bond
+  and reopens the window; `all` also erases the WiFi list, the parameters and every recording, keeps device_id,
+  enrolment and the OTA token, publishes `factory_reset {scope, by, cmd_id, recording_closed}`, tells the backend and
+  reboots (offline until a phone sets it up again). Refused while recording/uploading/updating unless `force`. Offline:
+  from OFF with the cable out, **press and hold** — the racket boots and after ~4 s blinks **white**; release, then
+  **one short press within 6 s** → full reset (white blink, reboot). No press → normal boot, nothing changed. The
+  charger's hardware long-press cut is 10 s (was 5 s) so the hold survives the boot; holding 10 s = ship mode, nothing
+  changed. `hello` and `state` carry `ble_bonded`.
+- **RAM**: the stack costs ≈ 54 KB internal (≈ 20 KB static controller code + 33 KB at start). Idle internal free, cloud
+  connected: 0.3.43 (no BLE) 122 KB → 0.3.44 59 → 0.3.45 (trim) 68 → 0.3.49 (own arrays to PSRAM) 80 → 0.3.52
+  (FreeRTOS in flash) **94 KB**; 91 KB with the phone connected; upload heap_min 68–70 KB. Upload with BLE up: 410–470
+  KB/s (vs ~530 without). WiFi STA + BLE coexistence is rated stable by Espressif; STA+AP+BLE is not, hence no AP.
 
 Core affinity: `sdkconfig.defaults` pins main, WiFi, lwIP and esp_timer to core 0; `httpd` has `core_id = 0`;
 the sampler is `xTaskCreatePinnedToCore(..., 1)` and installs the GPIO ISR service from core 1.
@@ -213,7 +243,8 @@ with the IDF certificate bundle). Runs entirely on core 0 (esp-mqtt task pinned 
   applies to `hello.clock.offset_ms` / `last_sync_utc_ms`: unknown is `null`, never a placeholder number.
 - Commands: `identify` (white LED flash), `sync_time`, `reboot`, `start_recording` (`rec_tag`, optional `rate_hz` which must
   equal the active ODR — the ODR is a reboot parameter; result `rec_id`), `stop_recording` (optional `rec_id` must match;
-  result `rec_id, samples, bytes, duration_ms`), `upload` (see below), `delete_recording` (`rec_id`); others rejected `unsupported`. Refusals use the
+  result `rec_id, samples, bytes, duration_ms`), `upload` (see below), `delete_recording` (`rec_id`), `factory_reset`
+  (`scope` `pairing` | `all`, `force`; 0.3.59 — see BLE), `fw_update`; others rejected `unsupported`. Refusals use the
   spec reasons: `busy`, `not_recording`, `storage_full`, `battery_low` (< 5 % on battery), `bad_args`. Duplicates (64-id history)
   re-ack the original outcome; `expires_utc_ms` honoured when the clock is synced.
 - Three consecutive connection refusals with the racket credential → credential erased → back to enrolment.

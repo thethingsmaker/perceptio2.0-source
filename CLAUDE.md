@@ -53,6 +53,20 @@ Working style: metric units, English or Italian, no fluff, verify against datash
 - **Switching off = ship mode, checked at the next boot.** Ship mode cannot engage with the cable in (→ CHARGE-IDLE)
   and a request can be ignored, so `power_mgr` leaves an RTC breadcrumb and falls back to deep sleep after 6 s; the boot
   report says which happened (README "Power"). Never call `bq25180_enter_ship_mode()` directly — use `power_mgr_off()`.
+- **BLE (0.3.44+, `src/ble.c`, `docs/ble-v1.md`).** One phone, one bond, API tunnel over GATT; the Android app
+  (`C:\PadelSense\perceptio`) is the primary UI, the web page is for the lab. NimBLE on core 0, host memory in PSRAM,
+  2 controller activities, no scan/DTM/coded PHY, MTU 512. Rules learned: the loopback HTTP client must read exactly
+  `Content-Length` (esp_http_server ignores `Connection: close`: 0.3.53 waited the 15 s timeout on every request, 0.3.54);
+  read request headers (`X-Transport`) BEFORE sending the answer — the response is built in the same scratch buffer
+  (0.3.57); CCCD subscriptions are not persisted so a bonded phone subscribing writes no NVS during a recording; pairing
+  (bond write) is refused while recording. Policy: pairing only while no bond exists and within 10 min of power-on; a
+  foreign phone is disconnected in the CONNECT event; factory reset (gesture TBD) or `POST /api/v1/ble/unpair` re-opens.
+- **Factory reset (0.3.59, `factory.c`)** runs only on the main task (NVS + NAND erase, cloud flush): the cloud command
+  queues it (`factory_request` → `factory_tick`), the button gesture runs it from the boot sequence. The gesture is "button
+  still held when a button-woken boot reads WAKE2, then one confirming short press": the MCU never sees the button level,
+  only the charger's WAKE1/WAKE2 flags, and the charger's own long-press cut (`MR_LPRESS`, now 10 s, was 5 s) ships the
+  board — a literal "hold 10 s" is impossible. `config_factory_reset` erases key by key: `ota_pat` shares the `cfg`
+  namespace and must survive.
 - **No access point (0.3.46, BLE line).** The fallback AP of 0.3.21–0.3.43 is gone (revert to 0.3.43 for it); phone
   setup/control moves to BLE. `net.c` rejoins the saved list every 15 s while offline (`rejoin_task`, PSRAM stack); the
   radio is never stopped (BLE shares it). Lesson kept from the AP: scans return to the home channel between channels
@@ -95,9 +109,18 @@ Later modules: `clock` (SNTP, TZ, sync hook), `cloud` (MQTT5/WSS per `docs/proto
 `upload` (resumable HTTPS per data-v2 §2, driven by the backend's `upload` command). Store rules: blocks 8..1019 data, 0..7/1020..1023
 reserved (self-test scratch only); every page carries a 16 B header so the inventory is a boot-time scan, no directory;
 `config_set_locked()` while recording (PATCH /config → 409); NAND reads (download/delete) refused while recording; the
-session is always closed with a trailer before power-off/timeout/storage-full. Capacity ≈ 110 min at 960 Hz.
+session is always closed with a trailer before power-off/timeout/storage-full. Capacity ≈ 110 min at 960 Hz uncompressed worst case; codec 1 (delta bit-packing) stores a still racket at ~5 B/sample
+(150 min = 42 MB, 0.3.57 test) and a match at ~40–45 MB, so `session_max` ends a session long before the storage does.
 
 ## Memory and upload throughput (re-measured 2026-10-29, fw 0.3.27 — do not re-tune without new data)
+
+BLE line (board f3c, idle, cloud connected, internal free): 0.3.43 122 KB → 0.3.44 BLE on 59 → 0.3.45 trimmed 68 →
+0.3.49 own static arrays to PSRAM 80 → 0.3.52 `FREERTOS_PLACE_FUNCTIONS_INTO_FLASH` **94 KB**; phone connected 91 KB;
+upload heap_min 68 KB. **`CONFIG_SPI_FLASH_ROM_IMPL=y` crashed at boot (0.3.50)**: the ROM driver's first NVS write
+overwrote the stdout `__sf` FILE (InstrFetchProhibited in `__swrite`); the bootloader rolled back. Stays off — the option
+is commented in `sdkconfig.defaults`. `BT_CTRL_RUN_IN_FLASH_ONLY` deliberately not tried after that. Core dumps: decoding
+needs the ELF of the exact build (app SHA256 check): `publish_release.py` keeps it as `res/elf/firmware-<ver>.elf` (git-ignored)
+and uploads it to the GitHub Release as `firmware-<ver>.elf` (not `.bin`, so OTA still picks `firmware.bin`).
 
 Internal RAM free (fw 0.3.27, board fcc): after drivers 250 KB, after Wi-Fi join 158 KB, **idle ≈ 123 KB** with Wi-Fi +
 MQTT/TLS + HTTP server; **≈ 100 KB minimum during an upload** (Live tab open); ≈ 145 KB in OTA update mode, ≈ 114 KB
@@ -126,8 +149,9 @@ prints the heap, `upload` acks carry `stats.heap_min_kb`, OTA progress lines car
 
 - Battery: on-battery operation, ship mode and low-battery shutdown verified (0.3.33/0.3.34, board …fcc). Still open:
   a full charge from a low cell (CC→CV→DONE); no battery → disable charging and show "no battery".
-- BLE line (0.3.44+): NimBLE costs ~54 KB internal after the 0.3.45 trim (idle 122 -> 68 KB). Recovering RAM next
-  (own arrays to PSRAM, flash driver from ROM, FreeRTOS into flash; BLE controller in flash last), then the API tunnel.
+- BLE line, open: LIVE characteristic (binary IMU frames over notify, lower rate than `/ws`) so the web page and `/ws`
+  can go behind a build switch (measure the RAM gain); factory-reset gesture (5 s hold is the charger's); a battery
+  campaign — 150 min recording with WiFi + MQTT + BLE advertising cost ≈ 22 %/h (0.3.57, board f3c, voltage-estimated SoC).
 - Power-off: `cloud_shutdown` runs from the main task while the cloud task may still be active (possible minor race).
 - OTA task stack 7168: peak 4.8 KB (remote update with a tag lookup, 2026-11-03) → could go to ~6 KB. Step 4: feature
   on/off switches.

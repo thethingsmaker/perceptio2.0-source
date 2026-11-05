@@ -13,3 +13,4 @@ include/cloud_secrets.h
 tools/p2_token.txt
 res/pat.txt
 logs/
+res/elf/

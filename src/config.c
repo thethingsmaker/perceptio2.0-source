@@ -271,12 +271,16 @@ esp_err_t config_user_off_set(bool off)
     return e;
 }
 
+/* Factory reset (0.3.59): parameters, WiFi list and user_off go; the OTA token (ota_pat), ota_tgt and fw_version stay
+ * (same namespace, hence key by key instead of nvs_erase_all). RAM copies are not touched: the caller reboots. */
 esp_err_t config_factory_reset(void)
 {
     nvs_handle_t h; esp_err_t e = nvs_open_rw(&h);
     if (e != ESP_OK) return e;
-    e = nvs_erase_all(h);
-    if (e == ESP_OK) e = nvs_commit(h);
+    for (size_t i = 0; i < N_PARAMS; i++) nvs_erase_key(h, PARAM_TABLE[i].key);
+    nvs_erase_key(h, KEY_WIFI);
+    nvs_erase_key(h, "user_off");
+    e = nvs_commit(h);
     nvs_close(h);
     return e;
 }

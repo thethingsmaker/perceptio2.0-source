@@ -28,6 +28,7 @@ void power_mgr_charge_idle(void);          /* never returns: the CHARGE-IDLE loo
  * user had switched off: cable in -> CHARGE-IDLE (never returns); woken by the fallback TIMER with nobody pressing
  * -> back to sleep (never returns); woken by the button -> clears user_off and returns (turn on). */
 void power_mgr_boot(bool plugged);
+bool power_mgr_button_boot(void);          /* this boot was the user pressing the button on a switched-off device */
 /* Low-battery shutdown (0.3.33), once a second: on battery, when the averaged VBAT stays <= parameter bat_off_mv
  * (default 3300) for 30 s, switch off exactly like the button (recording closed first, backend told) into ship mode.
  * Without it a flat board browns out at the BQ's 3.0 V BUVLO, the unloaded cell recovers, it boots, and repeats. */
