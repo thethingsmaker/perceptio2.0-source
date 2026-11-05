@@ -79,6 +79,8 @@ Max 8 networks. SSID ≤ 32 bytes, password ≤ 64.
 | `GET /recordings/<rec_id>` | the recording as a **PCR2** file (`docs/data-v2.md`), `application/octet-stream`, `<rec_id>.pcr2` — byte-identical to what the upload sends. Validate with `tools/pcr2_dump.py`. 409 while recording. |
 | `DELETE /recordings/<rec_id>` | erases it; returns the list. 409 while recording. |
 
+Requests arriving through the BLE tunnel carry `X-Transport: ble` and are attributed to `app` in events and logs (`by`), the web page to `ui` (0.3.56).
+
 A recording also starts/stops with a **double press** of the racket button (two presses of ≥ 0.3 s each within 1.5 s; a single press does nothing, holding 3 s powers off) and from the backend (`start_recording` / `stop_recording`
 commands); the UI shows whoever started it. Capacity at 960 Hz × 20 B: ~1.15 MB/min → ~110 min on the 126 MB usable
 (480 Hz doubles it). The session stops by itself at `session_max` minutes or when the storage is full.

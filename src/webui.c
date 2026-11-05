@@ -457,6 +457,14 @@ static esp_err_t h_time_post(httpd_req_t *r)
     return send_json(r, j, NULL);
 }
 
+/* Origin of a request for events/logs (0.3.56): "app" when it came through the BLE tunnel (ble.c adds X-Transport: ble),
+ * "ui" for the web page / LAN. */
+static const char *origin(httpd_req_t *r)
+{
+    char v[8];
+    return httpd_req_get_hdr_value_str(r, "X-Transport", v, sizeof v) == ESP_OK && strcmp(v, "ble") == 0 ? "app" : "ui";
+}
+
 /* ---- BLE pairing state (0.3.55) ---- */
 static esp_err_t h_ble_get(httpd_req_t *r)
 {
@@ -508,7 +516,7 @@ static esp_err_t h_reboot(httpd_req_t *r)
 {
     cors(r);
     httpd_resp_sendstr(r, "{\"ok\":true}");
-    app_reboot("ui");                             /* does not return */
+    app_reboot(origin(r));                             /* does not return */
     return ESP_OK;
 }
 
@@ -522,7 +530,7 @@ static esp_err_t h_power_off(httpd_req_t *r)
     snprintf(out, sizeof out, "{\"ok\":true,\"mode\":\"%s\",\"recording_closed\":%s}",
              bq.vin_pgood ? "charge_idle" : "ship", store_is_recording() ? "true" : "false");
     httpd_resp_sendstr(r, out);
-    app_power_off("ui");
+    app_power_off(origin(r));
     return ESP_OK;
 }
 
@@ -652,7 +660,7 @@ static esp_err_t h_rec_start(httpd_req_t *r)         /* POST {"rec_tag": "..."} 
     if (cJSON_IsString(tag)) strncpy(tagbuf, tag->valuestring, sizeof tagbuf - 1);
     cJSON_Delete(b);
     char rid[32] = "";
-    app_err_t e = app_rec_start(tagbuf, "ui", rid);
+    app_err_t e = app_rec_start(tagbuf, origin(r), rid);
     if (e == APP_BUSY)         return send_err(r, "409 Conflict", "already recording");
     if (e == APP_STORAGE_FULL) return send_err(r, "507 Insufficient Storage", "storage full");
     if (e == APP_BATTERY_LOW)  return send_err(r, "409 Conflict", "battery low (< 5 %): connect the charger");
@@ -671,7 +679,7 @@ static esp_err_t h_rec_synth(httpd_req_t *r)         /* POST {"minutes": 150, "r
     char tagbuf[65] = "";
     if (cJSON_IsString(tag)) strncpy(tagbuf, tag->valuestring, sizeof tagbuf - 1);
     cJSON_Delete(b);
-    app_err_t e = app_rec_generate(minutes, tagbuf, "ui");
+    app_err_t e = app_rec_generate(minutes, tagbuf, origin(r));
     if (e == APP_BUSY)         return send_err(r, "409 Conflict", "already recording");
     if (e == APP_STORAGE_FULL) return send_err(r, "507 Insufficient Storage", "storage full");
     if (e != APP_OK)           return send_err(r, "500 Internal Server Error", app_reason(e));
@@ -682,7 +690,7 @@ static esp_err_t h_rec_synth(httpd_req_t *r)         /* POST {"minutes": 150, "r
 static esp_err_t h_rec_stop(httpd_req_t *r)
 {
     store_rec_t done;
-    app_err_t e = app_rec_stop("ui", NULL, &done);
+    app_err_t e = app_rec_stop(origin(r), NULL, &done);
     if (e != APP_OK) return send_err(r, "409 Conflict", "not recording");
     return send_json(r, rec_json(&done), NULL);
 }
@@ -722,7 +730,7 @@ static esp_err_t h_rec_data(httpd_req_t *r)          /* the PCR2 file, byte for 
 static esp_err_t h_rec_delete(httpd_req_t *r)
 {
     char rid[32]; rec_id_from_uri(r, rid, sizeof rid);
-    app_err_t e = app_rec_delete(rid, "ui");
+    app_err_t e = app_rec_delete(rid, origin(r));
     if (e == APP_UNKNOWN_RECORDING || e == APP_BAD_ARGS) return send_err(r, "404 Not Found", "unknown recording");
     if (e == APP_BUSY)              return send_err(r, "409 Conflict", "recording in progress");
     if (e != APP_OK)                return send_err(r, "500 Internal Server Error", app_reason(e));
