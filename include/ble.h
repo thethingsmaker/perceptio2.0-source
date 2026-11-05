@@ -12,7 +12,12 @@
  * A request is served by an HTTP exchange with the board's own web server over loopback (127.0.0.1:80) in the BLE API
  * task, so the two transports can never drift apart: no handler is duplicated. Binary answers (core dump, recording
  * files) are not carried: 415.
- * Security: none yet — pairing/bonding comes in the next version; until then lab use only.
+ * Security (0.3.55): LE Secure Connections, Just Works, bonding, ONE bond. Out of the box the racket accepts a pairing
+ * from any phone during the first BLE_PAIR_WINDOW_S after power-on (the unboxing window); once a bond exists only that
+ * phone may stay connected (any other is disconnected at once) and the window never reopens — a factory reset (or the
+ * `POST /api/v1/ble/unpair` hook, which reopens the window) is the only way to pair another phone. REQ writes need an
+ * encrypted link; the racket starts encryption/pairing itself right after the connection. Pairing is refused while
+ * recording (the bond is written to NVS). Subscriptions are not persisted (no NVS write on subscribe).
  * Controller and host run on core 0 (core split), host memory in PSRAM (sdkconfig.defaults).
  */
 #pragma once
@@ -21,5 +26,11 @@
 
 #define BLE_MSG_MAX 12288                 /* request and response buffers (PSRAM) */
 
+#define BLE_PAIR_WINDOW_S 600             /* unboxing window: pairing accepted this long after power-on while unpaired */
+
+typedef struct { bool bonded, pairing_open, connected, encrypted; int window_s; } ble_status_t;
+
 esp_err_t ble_init(const char *device_id);   /* after the web server is up; starts advertising once the host syncs */
 bool      ble_connected(void);
+void      ble_status(ble_status_t *st);
+esp_err_t ble_unpair(void);                  /* erase the bond(s), reopen the window, drop the phone; ESP_ERR_INVALID_STATE while recording */

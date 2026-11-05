@@ -6,6 +6,7 @@
 #include "webui.h"
 #include "config.h"
 #include "selftest.h"
+#include "ble.h"
 #include "upload.h"
 #include "power.h"
 #include "ota.h"
@@ -456,6 +457,26 @@ static esp_err_t h_time_post(httpd_req_t *r)
     return send_json(r, j, NULL);
 }
 
+/* ---- BLE pairing state (0.3.55) ---- */
+static esp_err_t h_ble_get(httpd_req_t *r)
+{
+    ble_status_t b; ble_status(&b);
+    cJSON *j = cJSON_CreateObject();
+    cJSON_AddBoolToObject(j, "bonded", b.bonded);
+    cJSON_AddBoolToObject(j, "pairing_open", b.pairing_open);
+    cJSON_AddNumberToObject(j, "window_s", b.window_s);
+    cJSON_AddBoolToObject(j, "connected", b.connected);
+    cJSON_AddBoolToObject(j, "encrypted", b.encrypted);
+    return send_json(r, j, NULL);
+}
+static esp_err_t h_ble_unpair(httpd_req_t *r)
+{
+    esp_err_t e = ble_unpair();
+    if (e == ESP_ERR_INVALID_STATE) return send_err(r, "409 Conflict", "recording in progress");
+    if (e != ESP_OK) return send_err(r, "500 Internal Server Error", "bond store");
+    return h_ble_get(r);
+}
+
 /* ------------------------------------------------------------------ */
 static esp_err_t h_selftest(httpd_req_t *r)
 {
@@ -802,7 +823,7 @@ esp_err_t webui_start(webui_status_fn fn)
     cfg.task_priority    = 5;
     cfg.stack_size       = 8192;
     cfg.max_open_sockets = 7;
-    cfg.max_uri_handlers = 40;                    /* 34 registered; headroom */
+    cfg.max_uri_handlers = 40;                    /* 36 registered; headroom */
     cfg.lru_purge_enable = true;
     cfg.uri_match_fn     = httpd_uri_match_wildcard;
     cfg.close_fn         = on_close;
@@ -839,6 +860,8 @@ esp_err_t webui_start(webui_status_fn fn)
         { .uri = "/api/v1/ota/install", .method = HTTP_POST,  .handler = h_ota_install },
         { .uri = "/api/v1/ota/token",   .method = HTTP_POST,  .handler = h_ota_token },
         { .uri = "/api/v1/selftest",  .method = HTTP_GET,     .handler = h_selftest },
+        { .uri = "/api/v1/ble",        .method = HTTP_GET,    .handler = h_ble_get },
+        { .uri = "/api/v1/ble/unpair", .method = HTTP_POST,   .handler = h_ble_unpair },
         { .uri = "/api/v1/time",      .method = HTTP_POST,    .handler = h_time_post },
         { .uri = "/api/v1/recordings",        .method = HTTP_GET,    .handler = h_rec_list },
         { .uri = "/api/v1/recordings/start",  .method = HTTP_POST,   .handler = h_rec_start },

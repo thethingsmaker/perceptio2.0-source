@@ -61,6 +61,8 @@ Max 8 networks. SSID ≤ 32 bytes, password ≤ 64.
 | `POST /ota/install` | downloads the `.bin` asset of the last check into the spare slot, verifies, reboots (~30 s offline). 409 without a prior check, and on battery below 20 % (cable in: always allowed). The new image must be confirmed by a healthy boot or the bootloader rolls back |
 | `POST /ota/token` | `{"token":"ghp_…"}` stores the GitHub token in NVS (`""` clears). Never returned: `GET /ota` gives `token_hint` ("ghp_…1234") only |
 | `POST /power/off` | `{"ok":true,"mode":"ship"\|"charge_idle","recording_closed":bool}` — same as holding the button 3 s: closes a running recording, notifies the backend (`shutdown`), then ship mode; with a cable in, reboots into CHARGE-IDLE (UI off, charging on; a button press turns it back on, pulling the cable switches it off). The next boot logs whether ship mode engaged (README "Power") |
+| `GET /ble` | BLE pairing state (0.3.55, `docs/ble-v1.md`): `{bonded, pairing_open, window_s, connected, encrypted}` |
+| `POST /ble/unpair` | erases the bond(s), reopens the 10 min pairing window, disconnects the phone ~0.5 s later; answers like `GET /ble`. 409 while recording. Factory-reset hook until the gesture exists |
 | `GET /selftest` | results of the self-test run at boot: `{passed, total, results:[{name, pass, info}]}` |
 | `GET /coredump` | the last crash's core dump image as a file (`coredump-<device_id>-<fw>.bin`); 404 when there is none. Decode: `esp-coredump info_corefile -t raw -c <file> firmware.elf` (the ELF of the build that crashed). 409 while recording (flash read) |
 | `DELETE /coredump` | erases it: `{"erased":true}`. 409 while recording. A new crash overwrites it anyway |

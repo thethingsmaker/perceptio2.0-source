@@ -9,7 +9,15 @@ and JSON body is identical on both transports. Nothing is duplicated in the firm
 - Advertising name: `Perceptio-<device id>` (12 hex digits, e.g. `Perceptio-d40592485f3c`), connectable, every 500 ms.
   The scan response carries the service UUID below.
 - One phone at a time. Ask for the biggest ATT MTU (Android: `requestMtu(517)`); the racket accepts up to 512.
-- Security: none in 0.3.53 (lab). Pairing/bonding (LE Secure Connections, once out of the box) follows.
+- Security (0.3.55): LE Secure Connections, Just Works, bonding, **one bond**. Right after the connection the racket
+  starts encryption itself: with a bond it just encrypts; without one it pairs (Android shows the pairing dialog) — but
+  only in the **unboxing window**, the first 10 min after power-on while no phone is paired. Outside the window an
+  unpaired racket disconnects at once; a paired racket disconnects any phone other than the paired one. The app should
+  show "this racket is paired with another phone — factory-reset it to pair" on an immediate disconnect. The REQ
+  characteristic requires an encrypted link (writes before encryption fail with insufficient encryption).
+  `GET /api/v1/ble` → `{bonded, pairing_open, window_s, connected, encrypted}`; `POST /api/v1/ble/unpair` erases the
+  bond, reopens the window and drops the phone ~0.5 s after answering (409 while recording). The phone "forgetting" the
+  racket is accepted: the same phone re-pairs and replaces its bond (not while recording).
 
 ## GATT
 

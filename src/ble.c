@@ -18,6 +18,9 @@
 #include "host/util/util.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "store/config/ble_store_config.h"
+void ble_store_config_init(void);                 /* defined in ble_store_config.c, not in its header */
+#include "store.h"
 
 static const char *TAG = "BLE";
 #define ADV_ITVL_MS 500
@@ -28,6 +31,46 @@ static volatile bool s_conn;
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_mtu = 23;
 static char s_name[32];
+static volatile bool s_encrypted;
+static int64_t s_pair_until_us;                   /* pairing accepted until then (while no bond exists) */
+static esp_timer_handle_t s_kick_timer;           /* delayed disconnect after unpair */
+
+/* ---- pairing policy (0.3.55): one bonded phone, pairing only in the unboxing window ---- */
+static int bond_count(void)
+{
+    ble_addr_t a[2]; int n = 0;
+    ble_store_util_bonded_peers(a, &n, 2);
+    return n;
+}
+static bool is_bonded_peer(const ble_addr_t *id)
+{
+    ble_addr_t a[2]; int n = 0;
+    ble_store_util_bonded_peers(a, &n, 2);
+    for (int i = 0; i < n; i++) if (ble_addr_cmp(&a[i], id) == 0) return true;
+    return false;
+}
+static int window_left_s(void)
+{
+    int64_t left = (s_pair_until_us - esp_timer_get_time()) / 1000000;
+    return left > 0 ? (int)left : 0;
+}
+/* Subscriptions (CCCD) are not persisted: a bonded phone subscribing would otherwise write NVS, which is forbidden
+ * during a capture session; the app subscribes on every connection anyway. Bonds (SEC) are persisted. */
+static int bond_store_write(int obj_type, const union ble_store_value *val)
+{
+    if (obj_type == BLE_STORE_OBJ_TYPE_CCCD) return 0;
+    return ble_store_config_write(obj_type, val);
+}
+static int bond_store_delete(int obj_type, const union ble_store_key *key)
+{
+    if (obj_type == BLE_STORE_OBJ_TYPE_CCCD) return 0;
+    return ble_store_config_delete(obj_type, key);
+}
+static const char *addr_str(const ble_addr_t *a, char out[18])
+{
+    snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x", a->val[5], a->val[4], a->val[3], a->val[2], a->val[1], a->val[0]);
+    return out;
+}
 
 /* ---- GATT: service 7e2c0001-…, REQ 7e2c0002-…, RSP 7e2c0003-… (little-endian in BLE_UUID128_INIT) ---- */
 #define P2_UUID(b1, b0) BLE_UUID128_INIT(0x10, 0x6b, 0x0e, 0x1c, 0x7a, 0x2d, 0x5e, 0x9f, 0x3c, 0x4a, 0xf2, 0xb8, b0, b1, 0x2c, 0x7e)
@@ -67,7 +110,7 @@ static int gatt_access(uint16_t conn_handle, uint16_t attr_handle, struct ble_ga
 static const struct ble_gatt_svc_def s_svcs[] = {
     { .type = BLE_GATT_SVC_TYPE_PRIMARY, .uuid = &s_uuid_svc.u,
       .characteristics = (struct ble_gatt_chr_def[]) {
-          { .uuid = &s_uuid_req.u, .access_cb = gatt_access, .flags = BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE, .val_handle = &s_req_handle },
+          { .uuid = &s_uuid_req.u, .access_cb = gatt_access, .flags = BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC, .val_handle = &s_req_handle },
           { .uuid = &s_uuid_rsp.u, .access_cb = gatt_access, .flags = BLE_GATT_CHR_F_NOTIFY, .val_handle = &s_rsp_handle },
           { 0 } } },
     { 0 },
@@ -176,16 +219,52 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
     switch (ev->type) {
     case BLE_GAP_EVENT_CONNECT:
         if (ev->connect.status == 0) {
-            s_conn = true; s_conn_handle = ev->connect.conn_handle; s_rsp_subscribed = false; s_busy = false; s_req_len = 0; s_req_seq = 0;
-            ESP_LOGI(TAG, "phone connected (handle %d), %u KB internal free", ev->connect.conn_handle,
+            s_conn = true; s_conn_handle = ev->connect.conn_handle; s_rsp_subscribed = false; s_encrypted = false; s_busy = false; s_req_len = 0; s_req_seq = 0;
+            struct ble_gap_conn_desc d; char as[18];
+            ble_gap_conn_find(ev->connect.conn_handle, &d);
+            ESP_LOGI(TAG, "phone %s connected (handle %d), %u KB internal free", addr_str(&d.peer_id_addr, as), ev->connect.conn_handle,
                      (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
+            /* who may stay: the bonded phone; or, with no bond yet, anyone inside the pairing window (not while recording:
+             * storing the bond writes NVS) */
+            if (bond_count() == 0) {
+                if (window_left_s() == 0) { ESP_LOGW(TAG, "not paired and the pairing window is closed: disconnecting (power-cycle the racket to pair)"); ble_gap_terminate(ev->connect.conn_handle, BLE_ERR_REM_USER_CONN_TERM); break; }
+                if (store_is_recording()) { ESP_LOGW(TAG, "pairing refused while recording: disconnecting"); ble_gap_terminate(ev->connect.conn_handle, BLE_ERR_REM_USER_CONN_TERM); break; }
+                ESP_LOGI(TAG, "pairing with this phone (window open, %d s left)", window_left_s());
+            } else if (!is_bonded_peer(&d.peer_id_addr)) {
+                ESP_LOGW(TAG, "not the paired phone: disconnecting (factory reset to pair another phone)");
+                ble_gap_terminate(ev->connect.conn_handle, BLE_ERR_REM_USER_CONN_TERM); break;
+            }
+            int rc = ble_gap_security_initiate(ev->connect.conn_handle);   /* encrypt with the bond, or start pairing */
+            if (rc != 0) { ESP_LOGW(TAG, "security initiate rc %d: disconnecting", rc); ble_gap_terminate(ev->connect.conn_handle, BLE_ERR_REM_USER_CONN_TERM); }
         } else { ESP_LOGW(TAG, "connect failed (status %d): advertising again", ev->connect.status); advertise(); }
         break;
     case BLE_GAP_EVENT_DISCONNECT:
-        s_conn = false; s_conn_handle = BLE_HS_CONN_HANDLE_NONE; s_rsp_subscribed = false; s_mtu = 23;
+        s_conn = false; s_conn_handle = BLE_HS_CONN_HANDLE_NONE; s_rsp_subscribed = false; s_encrypted = false; s_mtu = 23;
         ESP_LOGI(TAG, "phone disconnected (reason 0x%03x): advertising again", ev->disconnect.reason);
         advertise();
         break;
+    case BLE_GAP_EVENT_ENC_CHANGE: {
+        struct ble_gap_conn_desc d;
+        if (ev->enc_change.status != 0 || ble_gap_conn_find(ev->enc_change.conn_handle, &d) != 0) {
+            ESP_LOGW(TAG, "pairing/encryption failed (status %d): disconnecting", ev->enc_change.status);
+            ble_gap_terminate(ev->enc_change.conn_handle, BLE_ERR_REM_USER_CONN_TERM); break;
+        }
+        s_encrypted = d.sec_state.encrypted;
+        ESP_LOGI(TAG, "link encrypted (bonded %d, %s); %d bond(s) stored", d.sec_state.bonded, d.sec_state.authenticated ? "authenticated" : "just works", bond_count());
+        break;
+    }
+    case BLE_GAP_EVENT_REPEAT_PAIRING: {
+        /* the paired phone lost its key (user "forgot" the racket): let it pair again, unless recording (NVS write) */
+        struct ble_gap_conn_desc d;
+        if (store_is_recording() || ble_gap_conn_find(ev->repeat_pairing.conn_handle, &d) != 0) {
+            ESP_LOGW(TAG, "paired phone asks to re-pair while recording: refused");
+            ble_gap_terminate(ev->repeat_pairing.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+            return BLE_GAP_REPEAT_PAIRING_IGNORE;
+        }
+        ESP_LOGW(TAG, "paired phone asks to re-pair: replacing its bond");
+        ble_store_util_delete_peer(&d.peer_id_addr);
+        return BLE_GAP_REPEAT_PAIRING_RETRY;
+    }
     case BLE_GAP_EVENT_ADV_COMPLETE: if (!s_conn) advertise(); break;
     case BLE_GAP_EVENT_MTU: s_mtu = ev->mtu.value; ESP_LOGI(TAG, "MTU %d (chunks of %d B)", s_mtu, s_mtu - 4); break;
     case BLE_GAP_EVENT_SUBSCRIBE:
@@ -236,6 +315,12 @@ esp_err_t ble_init(const char *device_id)
     esp_err_t e = nimble_port_init();
     if (e != ESP_OK) { ESP_LOGE(TAG, "nimble_port_init: %s", esp_err_to_name(e)); return e; }
     ble_hs_cfg.sync_cb = on_sync; ble_hs_cfg.reset_cb = on_reset;
+    /* LE Secure Connections, Just Works (no display/keypad on a racket), bonding, 1 bond (sdkconfig) */
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO; ble_hs_cfg.sm_bonding = 1; ble_hs_cfg.sm_mitm = 0; ble_hs_cfg.sm_sc = 1;
+    ble_hs_cfg.sm_our_key_dist = ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_store_config_init();                                   /* bonds in NVS (CONFIG_BT_NIMBLE_NVS_PERSIST) */
+    ble_hs_cfg.store_write_cb = bond_store_write; ble_hs_cfg.store_delete_cb = bond_store_delete;
+    s_pair_until_us = (int64_t)BLE_PAIR_WINDOW_S * 1000000;
     ble_svc_gap_init(); ble_svc_gatt_init();
     int rc = ble_gatts_count_cfg(s_svcs); if (rc == 0) rc = ble_gatts_add_svcs(s_svcs);
     if (rc != 0) { ESP_LOGE(TAG, "gatt services: rc %d", rc); return ESP_FAIL; }
@@ -248,3 +333,27 @@ esp_err_t ble_init(const char *device_id)
 }
 
 bool ble_connected(void) { return s_conn; }
+
+void ble_status(ble_status_t *st)
+{
+    st->bonded = bond_count() > 0;
+    st->pairing_open = !st->bonded && window_left_s() > 0;
+    st->window_s = st->bonded ? 0 : window_left_s();
+    st->connected = s_conn; st->encrypted = s_encrypted;
+}
+
+static void kick_cb(void *arg) { if (s_conn) ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM); }
+
+esp_err_t ble_unpair(void)
+{
+    if (store_is_recording()) return ESP_ERR_INVALID_STATE;
+    int n = bond_count();
+    int rc = ble_store_clear();
+    s_pair_until_us = esp_timer_get_time() + (int64_t)BLE_PAIR_WINDOW_S * 1000000;
+    ESP_LOGW(TAG, "unpaired: %d bond(s) erased (rc %d), pairing window open for %d s", n, rc, BLE_PAIR_WINDOW_S);
+    if (s_conn) {                                              /* let the answer go out first, then drop the phone */
+        if (!s_kick_timer) { esp_timer_create_args_t a = { .callback = kick_cb, .name = "ble_kick" }; esp_timer_create(&a, &s_kick_timer); }
+        esp_timer_start_once(s_kick_timer, 500000);
+    }
+    return rc == 0 ? ESP_OK : ESP_FAIL;
+}
