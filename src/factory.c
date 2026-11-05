@@ -12,6 +12,7 @@
 #include "store.h"
 #include "upload.h"
 #include "esp_log.h"
+#include "nvs.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -26,7 +27,35 @@ static bool s_force;
 static char s_by[12], s_cmd[40];
 static bool s_boot_done;                              /* gesture check decided for this boot */
 
+static bool s_store_ready;                            /* store_init done: recordings can be erased now */
+
 static bool busy(void) { return store_is_recording() || upload_active() || ota_busy(); }
+
+static int erase_recordings(void)
+{
+    int erased = 0;
+    for (int i = 0; i < store_count(); i++) {                     /* every recording; the inventory shrinks as we go */
+        const store_rec_t *r = store_rec(i);
+        if (r && store_delete(r->rec_id) == ESP_OK) erased++;
+    }
+    return erased;
+}
+
+/* NVS "cfg"/"fact_pend": a reset confirmed before the store was up still owes the recording erase. */
+static bool pending(void)
+{
+    nvs_handle_t h; uint8_t v = 0;
+    if (nvs_open("cfg", NVS_READONLY, &h) != ESP_OK) return false;
+    nvs_get_u8(h, "fact_pend", &v); nvs_close(h);
+    return v != 0;
+}
+static void set_pending(bool on)
+{
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READWRITE, &h) != ESP_OK) return;
+    if (on) nvs_set_u8(h, "fact_pend", 1); else nvs_erase_key(h, "fact_pend");
+    nvs_commit(h); nvs_close(h);
+}
 
 esp_err_t factory_request(factory_scope_t scope, bool force, const char *by, const char *cmd_id)
 {
@@ -59,15 +88,23 @@ static void execute(factory_scope_t scope, bool force, const char *by, const cha
     if (scope == FACTORY_PAIRING) { ESP_LOGW(TAG, "pairing reset done"); return; }
 
     int erased = 0;
-    for (int i = 0; i < store_count(); i++) {                     /* every recording; the inventory shrinks as we go */
-        const store_rec_t *r = store_rec(i);
-        if (r && store_delete(r->rec_id) == ESP_OK) erased++;
-    }
+    if (s_store_ready) erased = erase_recordings();
+    else set_pending(true);                                       /* boot gesture: the NAND store is not up yet -> next boot */
     esp_err_t e = config_factory_reset();                         /* parameters + WiFi list + user_off; keeps the OTA token */
-    ESP_LOGW(TAG, "erased: bonds, %d recording(s), WiFi list, parameters (%s) -> rebooting", erased, esp_err_to_name(e));
+    ESP_LOGW(TAG, "erased: bonds, %s, WiFi list, parameters (%s) -> rebooting",
+             s_store_ready ? (erased ? "recordings" : "no recordings") : "recordings at the next boot", esp_err_to_name(e));
     led_set(LED_OFF);
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();
+}
+
+void factory_store_ready(void)
+{
+    s_store_ready = true;
+    if (!pending()) return;
+    int n = erase_recordings();
+    set_pending(false);
+    ESP_LOGW(TAG, "factory reset finished: %d recording(s) erased", n);
 }
 
 void factory_tick(void)

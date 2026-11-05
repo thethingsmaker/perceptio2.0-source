@@ -21,6 +21,7 @@
 #include "store/config/ble_store_config.h"
 void ble_store_config_init(void);                 /* defined in ble_store_config.c, not in its header */
 #include "store.h"
+#include "nvs.h"
 
 static const char *TAG = "BLE";
 #define ADV_ITVL_MS 500
@@ -32,6 +33,7 @@ static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_mtu = 23;
 static char s_name[32];
 static volatile bool s_encrypted;
+static bool s_inited;                             /* ble_init done (the host and its bond store exist) */
 static int64_t s_pair_until_us;                   /* pairing accepted until then (while no bond exists) */
 static esp_timer_handle_t s_kick_timer;           /* delayed disconnect after unpair */
 
@@ -329,6 +331,7 @@ esp_err_t ble_init(const char *device_id)
     task_create_psram(api_task, "ble_api", 6144, NULL, 4, NULL, 0);   /* sockets + cJSON only: PSRAM stack is fine */
     size_t after = heap_caps_get_free_size(MALLOC_CAP_INTERNAL), after_ps = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     ESP_LOGI(TAG, "stack up: cost %d KB internal, %d KB PSRAM; %u KB internal free", (int)((before - after) >> 10), (int)((before_ps - after_ps) >> 10), (unsigned)(after >> 10));
+    s_inited = true;
     return ESP_OK;
 }
 
@@ -336,6 +339,7 @@ bool ble_connected(void) { return s_conn; }
 
 void ble_status(ble_status_t *st)
 {
+    if (!s_inited) { memset(st, 0, sizeof *st); return; }
     st->bonded = bond_count() > 0;
     st->pairing_open = !st->bonded && window_left_s() > 0;
     st->window_s = st->bonded ? 0 : window_left_s();
@@ -346,6 +350,13 @@ static void kick_cb(void *arg) { if (s_conn) ble_gap_terminate(s_conn_handle, BL
 
 esp_err_t ble_unpair(void)
 {
+    if (!s_inited) {                                           /* before ble_init (factory gesture at boot): wipe NimBLE's
+                                                                * NVS namespace; the host reads it later at start-up */
+        nvs_handle_t h; esp_err_t e = nvs_open("nimble_bond", NVS_READWRITE, &h);
+        if (e == ESP_OK) { e = nvs_erase_all(h); if (e == ESP_OK) e = nvs_commit(h); nvs_close(h); }
+        ESP_LOGW(TAG, "unpaired before BLE start: bond store erased (%s)", esp_err_to_name(e));
+        return e == ESP_OK || e == ESP_ERR_NVS_NOT_FOUND ? ESP_OK : e;
+    }
     if (store_is_recording()) return ESP_ERR_INVALID_STATE;
     int n = bond_count();
     int rc = ble_store_clear();

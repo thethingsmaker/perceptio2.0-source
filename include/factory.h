@@ -27,3 +27,4 @@ void      factory_tick(void);                 /* main loop: serves a queued requ
 /* Boot-time gesture check, main task, once, right after the LED turns blue: waits ≤ 1.2 s for a press on a button-woken
  * boot (nothing on other boots), longer only while a press is in progress; blocks ~6 s more when armed. */
 void      factory_boot_check(void);
+void      factory_store_ready(void);          /* main, right after store_init: finishes a reset confirmed at the previous boot */

@@ -231,6 +231,7 @@ void app_main(void)
     net_add_link_hook(cloud_link);                /* MQTT client start/stop */
     { cloud_status_t cs; cloud_get_status(&cs); store_init(cloud_device_id(), cs.boot_id, nand_ok); }
     store_set_event_hook(on_store_event);
+    factory_store_ready();                        /* a factory reset confirmed by the button owes the recording erase (factory.c) */
     upload_init(cloud_upload_done, cloud_device_id());               /* resumable HTTPS upload task (core 0), driven by the `upload` command */
     ota_init();                                   /* GitHub Releases updater; this image may still be PENDING_VERIFY */
     ota_set_update_mode(ota_mode_enter, cloud_resume);   /* an install runs with the cloud link down (frees its RAM) */
