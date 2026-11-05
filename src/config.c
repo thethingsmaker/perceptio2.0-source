@@ -278,7 +278,10 @@ esp_err_t config_factory_reset(void)
     nvs_handle_t h; esp_err_t e = nvs_open_rw(&h);
     if (e != ESP_OK) return e;
     for (size_t i = 0; i < N_PARAMS; i++) nvs_erase_key(h, PARAM_TABLE[i].key);
-    nvs_erase_key(h, KEY_WIFI);
+    /* an EMPTY list, not an erased key: a missing key means "fresh NVS" and config_init would seed wifi_defaults.h
+     * again (dev boards carry the lab network there) — a reset racket must come up with no network (0.3.63) */
+    cfg_wifi_list_t empty = { .layout = CFG_WIFI_LAYOUT, .count = 0 };
+    nvs_set_blob(h, KEY_WIFI, &empty, sizeof empty);
     nvs_erase_key(h, "user_off");
     e = nvs_commit(h);
     nvs_close(h);
