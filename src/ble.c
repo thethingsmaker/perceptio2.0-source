@@ -65,7 +65,9 @@ static int bond_store_write(int obj_type, const union ble_store_value *val)
 }
 static int bond_store_delete(int obj_type, const union ble_store_key *key)
 {
-    if (obj_type == BLE_STORE_OBJ_TYPE_CCCD) return 0;
+    /* "nothing stored" — NOT 0: ble_store_clear()/ble_store_util_delete_peer() delete in a `while (rc == 0)` loop and
+     * answering 0 for a type we never store spins forever (0.3.63: factory_reset from the backend hung the main task) */
+    if (obj_type == BLE_STORE_OBJ_TYPE_CCCD) return BLE_HS_ENOENT;
     return ble_store_config_delete(obj_type, key);
 }
 static const char *addr_str(const ble_addr_t *a, char out[18])

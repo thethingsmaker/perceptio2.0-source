@@ -58,7 +58,8 @@ Working style: metric units, English or Italian, no fluff, verify against datash
   2 controller activities, no scan/DTM/coded PHY, MTU 512. Rules learned: the loopback HTTP client must read exactly
   `Content-Length` (esp_http_server ignores `Connection: close`: 0.3.53 waited the 15 s timeout on every request, 0.3.54);
   read request headers (`X-Transport`) BEFORE sending the answer — the response is built in the same scratch buffer
-  (0.3.57); CCCD subscriptions are not persisted so a bonded phone subscribing writes no NVS during a recording; pairing
+  (0.3.57); CCCD subscriptions are not persisted so a bonded phone subscribing writes no NVS during a recording — the CCCD
+  delete callback must answer `BLE_HS_ENOENT`, not 0: NimBLE deletes in `while (rc == 0)` loops (0.3.63 hang); pairing
   (bond write) is refused while recording. Policy: pairing only while no bond exists and within 10 min of power-on; a
   foreign phone is disconnected in the CONNECT event; factory reset (gesture TBD) or `POST /api/v1/ble/unpair` re-opens.
 - **Factory reset (0.3.59, `factory.c`)** runs only on the main task (NVS + NAND erase, cloud flush): the cloud command
