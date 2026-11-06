@@ -52,4 +52,6 @@ uint32_t webui_ring_read(uint32_t *rd, webui_sample_t *out, uint32_t max);
 void webui_set_stream_hz(int hz);
 
 /* Start the server pinned to core 0. `fn` fills /api/v1/status. */
-esp_err_t webui_start(webui_status_fn fn);
+/* lan=false (0.3.66, parameter web_ui off): the server accepts loopback connections only — the BLE tunnel's — and
+ * registers neither the page nor /ws; the LAN cannot reach the API at all. lan=true: the lab web UI as before. */
+esp_err_t webui_start(webui_status_fn fn, bool lan);

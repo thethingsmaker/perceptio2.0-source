@@ -71,6 +71,10 @@ page stays for the lab. NimBLE peripheral, controller and host on core 0, host m
   (the unboxing window); otherwise an unpaired or foreign phone is disconnected at once. A factory reset — or the hook
   `POST /api/v1/ble/unpair` — is the only way to pair another phone. Pairing is refused while recording (NVS write);
   subscriptions are deliberately not persisted (no NVS write when the phone subscribes). `GET /api/v1/ble` shows the state.
+- **LIVE** (0.3.65, `…0004`): decimated raw IMU frames (240 Hz, one notification per 50 ms) while subscribed — the app's
+  Live tab; same sample layout as `/ws`.
+- **`web_ui` off by default** (0.3.66): the HTTP server only accepts loopback (the tunnel); page, `/ws` and mDNS are off
+  and the LAN cannot reach the API. Switch the parameter on from the app for the lab page.
 - **Factory reset** (0.3.59, `src/factory.c`): backend command `factory_reset {scope, force}` — `pairing` erases the bond
   and reopens the window; `all` also erases the WiFi list, the parameters and every recording, keeps device_id,
   enrolment and the OTA token, publishes `factory_reset {scope, by, cmd_id, recording_closed}`, tells the backend and

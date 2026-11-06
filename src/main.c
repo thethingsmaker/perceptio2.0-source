@@ -235,9 +235,6 @@ void app_main(void)
     upload_init(cloud_upload_done, cloud_device_id());               /* resumable HTTPS upload task (core 0), driven by the `upload` command */
     ota_init();                                   /* GitHub Releases updater; this image may still be PENDING_VERIFY */
     ota_set_update_mode(ota_mode_enter, cloud_resume);   /* an install runs with the cloud link down (frees its RAM) */
-    ble_init(cloud_device_id());                  /* advertising + API tunnel over loopback HTTP (ble.c); the web server
-                                                   * comes up below, a request before that is answered 502 */
-
     if (g_cfg.selftest_boot) {
         selftest_run(ST_QUICK | (g_cfg.selftest_full ? ST_NAND_STRESS : 0), g_cfg.selftest_full ? 30 : 0);
     } else {
@@ -251,12 +248,14 @@ void app_main(void)
     webui_set_stream_hz(g_cfg.ws_hz);
     if (imu_ok) { sampler_add_sink(store_feed); sampler_add_sink(webui_feed); sampler_start(); }
 
-    /* Web UI and mDNS start in any case (they bind to the station interface whenever it gets an address); no access
-     * point since 0.3.46: without a reachable saved network, net.c retries the list every 15 s (BLE setup next). */
+    /* The HTTP server always runs (the BLE tunnel talks to it on 127.0.0.1); the LAN page + mDNS only with web_ui on
+     * (0.3.66, lab). No access point since 0.3.46: without a reachable saved network, net.c retries every 15 s. */
     net_set_power_save(g_cfg.wifi_ps);
-    net_start_mdns(g_cfg.dev_name, config_fw_version());
-    webui_start(status_cb);
-    if (online) ESP_LOGI(TAG, ">>> http://%s/ <<<  heap %u KB internal (MQTT not yet connected)", net_ip(), (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
+    if (g_cfg.web_ui) net_start_mdns(g_cfg.dev_name, config_fw_version());
+    webui_start(status_cb, g_cfg.web_ui);
+    ble_init(cloud_device_id());                  /* advertising + API tunnel over loopback HTTP (ble.c), after the server */
+    if (online && g_cfg.web_ui) ESP_LOGI(TAG, ">>> http://%s/ <<<  heap %u KB internal (MQTT not yet connected)", net_ip(), (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
+    else if (online) ESP_LOGI(TAG, ">>> online, UI over BLE only (web_ui off) <<<  heap %u KB internal (MQTT not yet connected)", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
     else ESP_LOGW(TAG, ">>> no saved network reachable: retrying every 15 s <<<  heap %u KB internal", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10));
 
     bool healthy = imu_ok && nand_ok && selftest_passed() == selftest_count();

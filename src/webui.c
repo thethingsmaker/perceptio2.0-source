@@ -15,6 +15,7 @@
 #include "net.h"
 #include "esp_ota_ops.h"
 #include "esp_http_server.h"
+#include "lwip/sockets.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "task_psram.h"
@@ -833,7 +834,23 @@ static void ws_sender_task(void *arg)
 }
 
 /* ------------------------------------------------------------------ */
-esp_err_t webui_start(webui_status_fn fn)
+/* lan off: refuse every connection that is not from 127.0.0.1 (the BLE tunnel) before any request is read */
+static esp_err_t open_loopback_only(httpd_handle_t hd, int fd)
+{
+    struct sockaddr_in6 a; socklen_t al = sizeof a;
+    if (getpeername(fd, (struct sockaddr *)&a, &al) != 0) return ESP_FAIL;
+    if (a.sin6_family == AF_INET) return ((struct sockaddr_in *)&a)->sin_addr.s_addr == htonl(INADDR_LOOPBACK) ? ESP_OK : ESP_FAIL;
+    if (a.sin6_family == AF_INET6) {               /* v4-mapped ::ffff:127.0.0.1 or ::1 */
+        const uint8_t *b = a.sin6_addr.s6_addr;
+        bool mapped = true; for (int i = 0; i < 10; i++) mapped &= b[i] == 0; mapped &= b[10] == 0xff && b[11] == 0xff;
+        if (mapped) return b[12] == 127 ? ESP_OK : ESP_FAIL;
+        bool v6lo = b[15] == 1; for (int i = 0; i < 15; i++) v6lo &= b[i] == 0;
+        return v6lo ? ESP_OK : ESP_FAIL;
+    }
+    return ESP_FAIL;
+}
+
+esp_err_t webui_start(webui_status_fn fn, bool lan)
 {
     if (s_hd) return ESP_OK;                      /* already running */
     s_status_fn = fn;
@@ -850,13 +867,14 @@ esp_err_t webui_start(webui_status_fn fn)
     cfg.max_uri_handlers = 40;                    /* 36 registered; headroom */
     cfg.lru_purge_enable = true;
     cfg.uri_match_fn     = httpd_uri_match_wildcard;
+    if (!lan) cfg.open_fn = open_loopback_only;
     cfg.close_fn         = on_close;
     httpd_handle_t h = NULL;
     esp_err_t e = httpd_start(&h, &cfg);
     if (e != ESP_OK) { ESP_LOGE(TAG, "httpd_start: %s", esp_err_to_name(e)); return e; }
     s_hd = h;
     for (int i = 0; i < WS_MAX; i++) s_ws_fd[i] = -1;
-    task_create_psram(ws_sender_task, "ws_sender", 4096, NULL, 6, NULL, 0);
+    if (lan) task_create_psram(ws_sender_task, "ws_sender", 4096, NULL, 6, NULL, 0);
 
     const httpd_uri_t uris[] = {
         { .uri = "/",                 .method = HTTP_GET,     .handler = h_root },
@@ -896,7 +914,11 @@ esp_err_t webui_start(webui_status_fn fn)
         { .uri = "/api/*",            .method = HTTP_OPTIONS, .handler = h_options },
         { .uri = "/ws",               .method = HTTP_GET,     .handler = h_ws, .is_websocket = true },
     };
-    for (size_t i = 0; i < sizeof uris / sizeof uris[0]; i++) httpd_register_uri_handler(h, &uris[i]);
-    ESP_LOGI(TAG, "HTTP server up on core 0 (%u B page)", (unsigned)index_html_gz_len);
+    for (size_t i = 0; i < sizeof uris / sizeof uris[0]; i++) {
+        bool page = uris[i].handler == h_root || uris[i].handler == h_favicon || uris[i].handler == h_ws;
+        if (page && !lan) continue;               /* loopback-only mode: API for the tunnel, no page, no /ws */
+        httpd_register_uri_handler(h, &uris[i]);
+    }
+    ESP_LOGI(TAG, "HTTP server up on core 0, %s", lan ? "on the LAN with the page (web_ui on)" : "loopback only: the BLE tunnel is the UI (web_ui off)");
     return ESP_OK;
 }

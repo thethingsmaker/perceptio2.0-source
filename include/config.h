@@ -20,8 +20,8 @@
 
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 3
-#define FW_VERSION_PATCH 65
-#define FW_VERSION_STR   "0.3.65"
+#define FW_VERSION_PATCH 66
+#define FW_VERSION_STR   "0.3.66"
 
 /* ------------------------------------------------------------------ */
 /* WiFi list                                                           */
@@ -67,6 +67,7 @@ typedef struct {
     int32_t gy_fs_dps;       /* gyro full scale: 250..4000 */
     int32_t hg_fs_g;         /* high-g channel full scale: 32..320 */
     int32_t led_bright;      /* 0-100 % */
+    bool    web_ui;          /* web page + API reachable on the LAN (lab); off = loopback only, the BLE tunnel is the UI (0.3.66) */
     bool    wifi_ps;         /* modem power save when idle */
     int32_t ws_hz;           /* live-stream flush rate to browsers */
     int32_t session_max_min; /* auto-stop a session after N minutes */

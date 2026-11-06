@@ -69,6 +69,9 @@ Working style: metric units, English or Italian, no fluff, verify against datash
   hold through the boot gave nothing), and its own long-press cut (`MR_LPRESS`, now 10 s, was 5 s) ships the board — a
   literal "hold 10 s" is impossible. The check runs once, ≤ 1.2 s after the blue LED; earlier presses are ignored. `config_factory_reset` erases key by key: `ota_pat` shares the `cfg`
   namespace and must survive.
+- **`web_ui` off by default (0.3.66).** The HTTP server stays (the tunnel needs 127.0.0.1) with `open_fn` refusing any
+  non-loopback peer; page, `/ws`, ws_sender and mDNS exist only with the parameter on. BLE advertising starts after the
+  server so the app never gets 502 at boot.
 - **No access point (0.3.46, BLE line).** The fallback AP of 0.3.21–0.3.43 is gone (revert to 0.3.43 for it); phone
   setup/control moves to BLE. `net.c` rejoins the saved list every 15 s while offline (`rejoin_task`, PSRAM stack); the
   radio is never stopped (BLE shares it). Lesson kept from the AP: scans return to the home channel between channels
