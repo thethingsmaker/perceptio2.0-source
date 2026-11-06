@@ -42,6 +42,11 @@ typedef imu_sample_t webui_sample_t;
 
 /* Sampler sink: called from the core-1 task for every sample. Lock-free, never blocks. */
 void webui_feed(const imu_sample_t *smp, int64_t t_us);
+/* Live ring reader for other consumers (ble.c LIVE, 0.3.65): copies up to `max` samples starting at *rd (an absolute
+ * sample index: start from webui_ring_wr()), advances *rd, skips forward when the ring has lapped it. Returns the
+ * count; 0 when nothing new or no ring. Any task. */
+uint32_t webui_ring_wr(void);
+uint32_t webui_ring_read(uint32_t *rd, webui_sample_t *out, uint32_t max);
 
 /* Live-stream flush rate (frames/s to browsers), 10..60. */
 void webui_set_stream_hz(int hz);

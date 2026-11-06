@@ -21,6 +21,8 @@
 #include "store/config/ble_store_config.h"
 void ble_store_config_init(void);                 /* defined in ble_store_config.c, not in its header */
 #include "store.h"
+#include "imu.h"
+#include "webui.h"
 #include "nvs.h"
 
 static const char *TAG = "BLE";
@@ -81,8 +83,16 @@ static const char *addr_str(const ble_addr_t *a, char out[18])
 static const ble_uuid128_t s_uuid_svc = P2_UUID(0x00, 0x01);
 static const ble_uuid128_t s_uuid_req = P2_UUID(0x00, 0x02);
 static const ble_uuid128_t s_uuid_rsp = P2_UUID(0x00, 0x03);
-static uint16_t s_req_handle, s_rsp_handle;
-static volatile bool s_rsp_subscribed;
+static const ble_uuid128_t s_uuid_live = P2_UUID(0x00, 0x04);
+static uint16_t s_req_handle, s_rsp_handle, s_live_handle;
+static volatile bool s_rsp_subscribed, s_live_subscribed;
+
+/* LIVE (0.3.65): raw IMU samples, decimated, one self-contained frame per notification every LIVE_PERIOD_MS:
+ *   uint32 seq (index of the first sample, absolute), uint16 n, uint8 div, uint8 sample_bytes, then n x imu_sample_t.
+ * div = odr / LIVE_RATE_HZ (4 at 960 Hz -> 240 Hz); consecutive frames: seq' == seq + n*div, else samples were lost. */
+#define LIVE_PERIOD_MS 50
+#define LIVE_RATE_HZ   240
+#define LIVE_MAX_N     25                                /* 8 + 25*20 = 508 B = MTU 512 - 3 - 1 */
 
 /* request assembly (REQ writes arrive on the NimBLE host task) and the API task that serves it */
 static uint8_t *s_req;  static size_t s_req_len;  static uint8_t s_req_seq;
@@ -116,6 +126,7 @@ static const struct ble_gatt_svc_def s_svcs[] = {
       .characteristics = (struct ble_gatt_chr_def[]) {
           { .uuid = &s_uuid_req.u, .access_cb = gatt_access, .flags = BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC, .val_handle = &s_req_handle },
           { .uuid = &s_uuid_rsp.u, .access_cb = gatt_access, .flags = BLE_GATT_CHR_F_NOTIFY, .val_handle = &s_rsp_handle },
+          { .uuid = &s_uuid_live.u, .access_cb = gatt_access, .flags = BLE_GATT_CHR_F_NOTIFY, .val_handle = &s_live_handle },
           { 0 } } },
     { 0 },
 };
@@ -187,6 +198,41 @@ static int http_loopback(const char *method, const char *path, const char *body,
     return status;
 }
 
+/* ---- LIVE sender: ring (webui.c, fed by the core-1 sampler) -> decimate -> one notification per period ---- */
+static void live_task(void *arg)
+{
+    webui_sample_t *buf = heap_caps_malloc(64 * sizeof(webui_sample_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint8_t *frame = heap_caps_malloc(8 + LIVE_MAX_N * sizeof(webui_sample_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf || !frame) { ESP_LOGE(TAG, "no PSRAM for the live stream"); vTaskDelete(NULL); }
+    uint32_t rd = webui_ring_wr(); bool was_on = false; uint32_t sent = 0, dropped = 0;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(LIVE_PERIOD_MS));
+        bool on = s_conn && s_live_subscribed;
+        if (!on) { if (was_on) { ESP_LOGI(TAG, "LIVE: %u frames sent, %u not delivered", (unsigned)sent, (unsigned)dropped); sent = dropped = 0; } was_on = false; rd = webui_ring_wr(); continue; }
+        was_on = true;
+        int odr = imu_get_cfg()->odr_hz;                                   /* the ACTIVE rate */ uint32_t div = odr > LIVE_RATE_HZ ? (uint32_t)(odr / LIVE_RATE_HZ) : 1;
+        uint32_t max_n = ((uint32_t)s_mtu - 3 - 8) / sizeof(webui_sample_t);
+        if (max_n > LIVE_MAX_N) max_n = LIVE_MAX_N;
+        if (max_n == 0) { rd = webui_ring_wr(); continue; }                   /* MTU 23: no room, stay silent */
+        uint32_t n = 0, first = 0;
+        while (n < max_n) {                                                   /* drain the ring, keep every div-th sample */
+            uint32_t got = webui_ring_read(&rd, buf, 64);
+            if (!got) break;
+            for (uint32_t k = 0; k < got && n < max_n; k++) {
+                uint32_t idx = rd - got + k;
+                if (idx % div) continue;
+                if (!n) first = idx;
+                memcpy(frame + 8 + n * sizeof(webui_sample_t), &buf[k], sizeof(webui_sample_t)); n++;
+            }
+        }
+        if (!n) continue;
+        uint16_t n16 = (uint16_t)n; uint8_t d8 = (uint8_t)div, sb = (uint8_t)sizeof(webui_sample_t);
+        memcpy(frame, &first, 4); memcpy(frame + 4, &n16, 2); frame[6] = d8; frame[7] = sb;
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(frame, 8 + n * sizeof(webui_sample_t));
+        if (!om || ble_gatts_notify_custom(s_conn_handle, s_live_handle, om) != 0) dropped++; else sent++;
+    }
+}
+
 static void api_task(void *arg)
 {
     char *http = heap_caps_malloc(BLE_MSG_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -243,7 +289,7 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
         } else { ESP_LOGW(TAG, "connect failed (status %d): advertising again", ev->connect.status); advertise(); }
         break;
     case BLE_GAP_EVENT_DISCONNECT:
-        s_conn = false; s_conn_handle = BLE_HS_CONN_HANDLE_NONE; s_rsp_subscribed = false; s_encrypted = false; s_mtu = 23;
+        s_conn = false; s_conn_handle = BLE_HS_CONN_HANDLE_NONE; s_rsp_subscribed = false; s_live_subscribed = false; s_encrypted = false; s_mtu = 23;
         ESP_LOGI(TAG, "phone disconnected (reason 0x%03x): advertising again", ev->disconnect.reason);
         advertise();
         break;
@@ -273,6 +319,7 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
     case BLE_GAP_EVENT_MTU: s_mtu = ev->mtu.value; ESP_LOGI(TAG, "MTU %d (chunks of %d B)", s_mtu, s_mtu - 4); break;
     case BLE_GAP_EVENT_SUBSCRIBE:
         if (ev->subscribe.attr_handle == s_rsp_handle) { s_rsp_subscribed = ev->subscribe.cur_notify; ESP_LOGI(TAG, "RSP notifications %s", s_rsp_subscribed ? "on" : "off"); }
+        if (ev->subscribe.attr_handle == s_live_handle) { s_live_subscribed = ev->subscribe.cur_notify; ESP_LOGI(TAG, "LIVE stream %s", s_live_subscribed ? "on" : "off"); }
         break;
     default: break;
     }
@@ -331,6 +378,7 @@ esp_err_t ble_init(const char *device_id)
     ble_svc_gap_device_name_set(s_name);
     nimble_port_freertos_init(host_task);
     task_create_psram(api_task, "ble_api", 6144, NULL, 4, NULL, 0);   /* sockets + cJSON only: PSRAM stack is fine */
+    task_create_psram(live_task, "ble_live", 4096, NULL, 5, NULL, 0);  /* LIVE frames (0.3.65) */
     size_t after = heap_caps_get_free_size(MALLOC_CAP_INTERNAL), after_ps = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     ESP_LOGI(TAG, "stack up: cost %d KB internal, %d KB PSRAM; %u KB internal free", (int)((before - after) >> 10), (int)((before_ps - after_ps) >> 10), (unsigned)(after >> 10));
     s_inited = true;

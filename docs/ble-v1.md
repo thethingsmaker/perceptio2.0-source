@@ -26,6 +26,7 @@ and JSON body is identical on both transports. Nothing is duplicated in the firm
 | Service | `7e2c0001-b8f2-4a3c-9f5e-2d7a1c0e6b10` | primary |
 | REQ | `7e2c0002-b8f2-4a3c-9f5e-2d7a1c0e6b10` | write without response (also write) — phone → racket |
 | RSP | `7e2c0003-b8f2-4a3c-9f5e-2d7a1c0e6b10` | notify — racket → phone (enable via the CCCD) |
+| LIVE | `7e2c0004-b8f2-4a3c-9f5e-2d7a1c0e6b10` | notify — live IMU samples while subscribed (0.3.65), see below |
 
 ## Framing (both directions)
 
@@ -62,3 +63,20 @@ Response (RSP):
 
 Not available over BLE: `GET /api/v1/recordings/<id>` (the PCR2 file), `GET /api/v1/coredump`, the WebSocket live stream
 (`/ws`) — a LIVE characteristic with the same binary frames comes in a later version.
+
+## LIVE stream (0.3.65)
+
+Subscribe to LIVE (CCCD) and the racket notifies one self-contained frame every 50 ms, little-endian:
+
+```
+uint32  seq           absolute index of the first sample in this frame
+uint16  n             samples in this frame (≤ 25)
+uint8   div           decimation: every div-th sample of the IMU rate (4 at 960 Hz → 240 Hz)
+uint8   sample_bytes  20
+n ×  int16[10]        TEMP, GX, GY, GZ, AX, AY, AZ, HGX, HGY, HGZ   raw LSB — same layout and scaling as /ws (API.md)
+```
+
+Gap detection: the next frame's `seq` should be `seq + n*div`. The frame fits one notification at MTU ≥ 48; at the
+default 23 nothing is sent. ≈ 12 samples / 248 B per frame at 960 Hz, 5 KB/s. Unsubscribe to stop; the stream also stops
+on disconnect. The REQ/RSP tunnel keeps working while LIVE is on (the two share the link; a status poll adds ~1 frame
+of latency).

@@ -20,8 +20,8 @@
 
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 3
-#define FW_VERSION_PATCH 64
-#define FW_VERSION_STR   "0.3.64"
+#define FW_VERSION_PATCH 65
+#define FW_VERSION_STR   "0.3.65"
 
 /* ------------------------------------------------------------------ */
 /* WiFi list                                                           */

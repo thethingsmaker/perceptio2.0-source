@@ -790,6 +790,20 @@ static void on_close(httpd_handle_t hd, int fd)
     close(fd);
 }
 
+uint32_t webui_ring_wr(void) { return __atomic_load_n(&s_wr, __ATOMIC_ACQUIRE); }
+
+uint32_t webui_ring_read(uint32_t *rd, webui_sample_t *out, uint32_t max)
+{
+    webui_sample_t *ring = s_ring;
+    if (!ring) return 0;
+    uint32_t wr = __atomic_load_n(&s_wr, __ATOMIC_ACQUIRE);
+    if (wr - *rd > RING_N) *rd = wr - RING_N;
+    uint32_t n = wr - *rd; if (n > max) n = max;
+    for (uint32_t k = 0; k < n; k++) out[k] = ring[(*rd + k) % RING_N];
+    *rd += n;
+    return n;
+}
+
 static void ws_sender_task(void *arg)
 {
     /* PSRAM since 0.3.49 (1.3 KB internal before): httpd copies it into its own socket buffers */
