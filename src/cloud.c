@@ -4,6 +4,7 @@
 #include <inttypes.h>
 #include "cloud.h"
 #include "mbedtls/md.h"
+#include "mbedtls/base64.h"
 #include "ble.h"
 #include "factory.h"
 #include "bus.h"
@@ -167,6 +168,28 @@ static void publish_state(void)
     cJSON_AddNumberToObject(j, "seq", s_seq);
     { ble_status_t b; ble_status(&b); cJSON_AddBoolToObject(j, "ble_bonded", b.bonded); }
     pub_json(topic("state"), j, 1, true);
+}
+
+/* Racket claiming (0.3.68, player API §4): rackets enrolled before the claim scheme existed have no claim key on
+ * the backend (Mosquitto keeps only a password hash), so the racket tells it once per connection: event
+ * `claim_key {key}` over its own authenticated link. Identical keys are accepted silently, a different one refused;
+ * new enrolments carry the key anyway. Sent as a direct publish, never through the replay buffer. */
+static void publish_claim_key(void)
+{
+    uint8_t key[32]; unsigned char b64[48]; size_t n = 0;
+    if (!cloud_claim_key(key) || mbedtls_base64_encode(b64, sizeof b64, &n, key, sizeof key) != 0) return;
+    memset(key, 0, sizeof key);
+    cJSON *j = cJSON_CreateObject();                            /* same envelope as ev_publish, seq 0 = out of band */
+    cJSON_AddNumberToObject(j, "boot_id", s_boot_id);
+    cJSON_AddNumberToObject(j, "seq", 0);
+    int64_t utc = clock_utc_ms();
+    if (utc) cJSON_AddNumberToObject(j, "utc_ms", (double)utc); else cJSON_AddNullToObject(j, "utc_ms");
+    cJSON_AddNumberToObject(j, "mono_ms", esp_timer_get_time() / 1000);
+    cJSON_AddStringToObject(j, "type", "claim_key");
+    cJSON *d = cJSON_AddObjectToObject(j, "data");
+    cJSON_AddStringToObject(d, "key", (const char *)b64);
+    pub_json(topic("event"), j, 1, false);
+    ESP_LOGI(TAG, "claim_key published");
 }
 
 static void publish_hello(void)
@@ -592,6 +615,7 @@ static void on_mqtt(void *arg, esp_event_base_t base, int32_t id, void *data)
             esp_mqtt_client_subscribe(s_cli, topic("cmd"), 1);
             publish_hello();
             publish_state();
+            publish_claim_key();
             ev_replay();
         } else {
             s_state = CLOUD_ENROL_WAIT;
