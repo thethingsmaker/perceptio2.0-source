@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <inttypes.h>
 #include "cloud.h"
+#include "mbedtls/md.h"
 #include "ble.h"
 #include "factory.h"
 #include "bus.h"
@@ -904,6 +905,14 @@ void cloud_get_status(cloud_status_t *st)
 }
 
 const char *cloud_device_id(void) { return s_devid; }
+
+bool cloud_claim_key(uint8_t out[32])
+{
+    if (!s_enrolled) return false;
+    static const char ctx[] = "perceptio-claim-v1";
+    return mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), (const uint8_t *)s_pass, strlen(s_pass),
+                           (const uint8_t *)ctx, sizeof ctx - 1, out) == 0;
+}
 const char *cloud_state_name(cloud_state_t s)
 {
     static const char *n[] = { "off", "waiting for approval", "rejected", "connecting", "online", "offline" };

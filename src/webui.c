@@ -16,6 +16,8 @@
 #include "esp_ota_ops.h"
 #include "esp_http_server.h"
 #include "lwip/sockets.h"
+#include "mbedtls/md.h"
+#include "mbedtls/base64.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "task_psram.h"
@@ -466,6 +468,34 @@ static const char *origin(httpd_req_t *r)
     return httpd_req_get_hdr_value_str(r, "X-Transport", v, sizeof v) == ESP_OK && strcmp(v, "ble") == 0 ? "app" : "ui";
 }
 
+/* ---- racket claiming (0.3.67): sign the backend's nonce so the user's account can own this racket ----
+ * sig = base64(HMAC-SHA256(claim_key, "claim|<device_id>|<nonce>|<ts>")), ts = device clock (0 when unset). */
+static esp_err_t h_claim(httpd_req_t *r)
+{
+    cJSON *b = read_body(r);
+    const cJSON *nn = b ? cJSON_GetObjectItem(b, "nonce") : NULL;
+    char nonce[96] = "";
+    if (cJSON_IsString(nn) && strlen(nn->valuestring) >= 16 && strlen(nn->valuestring) < sizeof nonce) strcpy(nonce, nn->valuestring);
+    cJSON_Delete(b);
+    if (!nonce[0]) return send_err(r, "400 Bad Request", "nonce (16..95 chars) required");
+    uint8_t key[32];
+    if (!cloud_claim_key(key)) return send_err(r, "409 Conflict", "racket not enrolled yet: connect it to WiFi first");
+    clock_status_t cs; clock_get_status(&cs);
+    long long ts = cs.valid ? (long long)cs.now : 0;
+    char msg[192]; int n = snprintf(msg, sizeof msg, "claim|%s|%s|%lld", cloud_device_id(), nonce, ts);
+    uint8_t mac[32]; unsigned char sig[48]; size_t sl = 0;
+    if (mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), key, sizeof key, (const uint8_t *)msg, n, mac) != 0 ||
+        mbedtls_base64_encode(sig, sizeof sig, &sl, mac, sizeof mac) != 0) return send_err(r, "500 Internal Server Error", "hmac");
+    memset(key, 0, sizeof key);
+    cJSON *j = cJSON_CreateObject();
+    cJSON_AddStringToObject(j, "device_id", cloud_device_id());
+    cJSON_AddStringToObject(j, "nonce", nonce);
+    cJSON_AddNumberToObject(j, "ts", (double)ts);
+    cJSON_AddStringToObject(j, "sig", (const char *)sig);
+    ESP_LOGI(TAG, "claim: nonce signed (ts %lld)", ts);
+    return send_json(r, j, NULL);
+}
+
 /* ---- BLE pairing state (0.3.55) ---- */
 static esp_err_t h_ble_get(httpd_req_t *r)
 {
@@ -864,7 +894,7 @@ esp_err_t webui_start(webui_status_fn fn, bool lan)
     cfg.task_priority    = 5;
     cfg.stack_size       = 8192;
     cfg.max_open_sockets = 7;
-    cfg.max_uri_handlers = 40;                    /* 36 registered; headroom */
+    cfg.max_uri_handlers = 40;                    /* 37 registered; headroom */
     cfg.lru_purge_enable = true;
     cfg.uri_match_fn     = httpd_uri_match_wildcard;
     if (!lan) cfg.open_fn = open_loopback_only;
@@ -903,6 +933,7 @@ esp_err_t webui_start(webui_status_fn fn, bool lan)
         { .uri = "/api/v1/ota/token",   .method = HTTP_POST,  .handler = h_ota_token },
         { .uri = "/api/v1/selftest",  .method = HTTP_GET,     .handler = h_selftest },
         { .uri = "/api/v1/ble",        .method = HTTP_GET,    .handler = h_ble_get },
+        { .uri = "/api/v1/claim",      .method = HTTP_POST,   .handler = h_claim },
         { .uri = "/api/v1/ble/unpair", .method = HTTP_POST,   .handler = h_ble_unpair },
         { .uri = "/api/v1/time",      .method = HTTP_POST,    .handler = h_time_post },
         { .uri = "/api/v1/recordings",        .method = HTTP_GET,    .handler = h_rec_list },

@@ -64,6 +64,13 @@ Response (RSP):
 Not available over BLE: `GET /api/v1/recordings/<id>` (the PCR2 file), `GET /api/v1/coredump`, the WebSocket live stream
 (`/ws`) — a LIVE characteristic with the same binary frames comes in a later version.
 
+## Claiming a racket (0.3.67)
+
+To link the racket to the player's account the app forwards a backend nonce: `POST /api/v1/claim {"nonce"}` →
+`{device_id, nonce, ts, sig}`; the app posts that to the user API (`POST /v1/me/rackets`). The signature is an
+HMAC-SHA256 with a key derived from the racket's enrolment credential, so only a racket the backend enrolled can
+produce it, and the phone never sees any secret (API.md). Works offline; 409 until the racket has been enrolled once.
+
 ## LIVE stream (0.3.65)
 
 Subscribe to LIVE (CCCD) and the racket notifies one self-contained frame every 50 ms, little-endian:

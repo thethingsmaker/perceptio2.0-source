@@ -59,4 +59,7 @@ void        cloud_resume(void);
 void        cloud_event(const char *type, const char *data_json);   /* buffered, replayed; data_json may be NULL */
 void        cloud_get_status(cloud_status_t *st);
 const char *cloud_device_id(void);
+/* Racket claiming (0.3.67, backend user API): claim_key = HMAC-SHA256(key = the device's MQTT password issued at
+ * enrolment, msg = "perceptio-claim-v1"); the backend derives the same. false when not enrolled. Never logged. */
+bool        cloud_claim_key(uint8_t out[32]);
 const char *cloud_state_name(cloud_state_t s);
