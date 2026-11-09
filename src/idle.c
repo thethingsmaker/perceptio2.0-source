@@ -16,9 +16,11 @@
 
 static const char *TAG = "IDLE";
 
-static uint32_t s_still_s;          /* consecutive still seconds */
+static uint32_t s_still_s;          /* still seconds (one isolated moving second does not reset it) */
+static uint32_t s_moving_s;         /* consecutive moving seconds */
 static bool     s_have_prev;
-static float    s_prev_g[3];        /* accelerometer of the previous second, g */
+static float    s_prev_mg[3];       /* gravity reference: the last still sample (or the one that restarted the count), mg */
+static float    s_cur_mg[3];        /* this second's sample, adopted as the reference by the caller */
 static bool     s_warned, s_fired;
 
 /* why the timer is held at zero, or NULL when it may run */
@@ -37,21 +39,28 @@ static const char *busy_reason(void)
     return NULL;
 }
 
-/* one sample's verdict: true = the racket did not move in the last second */
-static bool still_now(void)
+/* the current sample becomes the gravity reference: after a still second, or after a confirmed move (a knock's sample must
+ * NOT become the reference, or the next resting sample would look like a second move) */
+static void adopt_ref(void) { s_prev_mg[0] = s_cur_mg[0]; s_prev_mg[1] = s_cur_mg[1]; s_prev_mg[2] = s_cur_mg[2]; s_have_prev = true; }
+
+/* one sample's verdict: true = the racket did not move in the last second; margins reported for the log */
+static bool still_now(float *gyro_dps, float *dacc_mg)
 {
     sampler_stats_t st; sampler_get_stats(&st);
+    *gyro_dps = *dacc_mg = 0;
     if (st.rate_hz == 0) { s_have_prev = false; return false; }          /* IMU silent: no verdict */
     imu_scale_t sc = imu_get_scale();
     float gx = st.last.v[1] * sc.gy_mdps_lsb / 1000.0f, gy = st.last.v[2] * sc.gy_mdps_lsb / 1000.0f, gz = st.last.v[3] * sc.gy_mdps_lsb / 1000.0f;
-    float ax = st.last.v[4] * sc.xl_mg_lsb / 1000.0f,  ay = st.last.v[5] * sc.xl_mg_lsb / 1000.0f,  az = st.last.v[6] * sc.xl_mg_lsb / 1000.0f;
-    float gyro = sqrtf(gx * gx + gy * gy + gz * gz), acc = sqrtf(ax * ax + ay * ay + az * az);
-    bool still = gyro < IDLE_GYRO_DPS && fabsf(acc - 1.0f) < IDLE_ACC_MG / 1000.0f;
-    if (still && s_have_prev)
-        still = fabsf(ax - s_prev_g[0]) < IDLE_ACC_MG / 1000.0f && fabsf(ay - s_prev_g[1]) < IDLE_ACC_MG / 1000.0f
-             && fabsf(az - s_prev_g[2]) < IDLE_ACC_MG / 1000.0f;
-    s_prev_g[0] = ax; s_prev_g[1] = ay; s_prev_g[2] = az; s_have_prev = true;
-    return still;
+    float ax = st.last.v[4] * sc.xl_mg_lsb, ay = st.last.v[5] * sc.xl_mg_lsb, az = st.last.v[6] * sc.xl_mg_lsb;   /* mg */
+    *gyro_dps = sqrtf(gx * gx + gy * gy + gz * gz);
+    if (s_have_prev) {
+        float d = fabsf(ax - s_prev_mg[0]);
+        if (fabsf(ay - s_prev_mg[1]) > d) d = fabsf(ay - s_prev_mg[1]);
+        if (fabsf(az - s_prev_mg[2]) > d) d = fabsf(az - s_prev_mg[2]);
+        *dacc_mg = d;
+    }
+    s_cur_mg[0] = ax; s_cur_mg[1] = ay; s_cur_mg[2] = az;
+    return *gyro_dps < IDLE_GYRO_DPS && (!s_have_prev || *dacc_mg < IDLE_ACC_MG);
 }
 
 void idle_tick_1s(void)
@@ -61,15 +70,21 @@ void idle_tick_1s(void)
     const char *busy = limit_s ? busy_reason() : "disabled";
     if (busy) {
         if (s_still_s >= 60) ESP_LOGI(TAG, "timer reset after %" PRIu32 " min still: %s", s_still_s / 60, busy);
-        s_still_s = 0; s_warned = false; s_have_prev = false;
+        s_still_s = 0; s_moving_s = 0; s_warned = false; s_have_prev = false;
         return;
     }
-    if (!still_now()) {
-        if (s_still_s >= 60) ESP_LOGI(TAG, "moved after %" PRIu32 " min still", s_still_s / 60);
-        s_still_s = 0; s_warned = false;
+    float gyro, dacc;
+    if (!still_now(&gyro, &dacc)) {
+        if (++s_moving_s >= IDLE_MOVE_S) {                                /* a single knock / vibration spike does not count */
+            if (s_still_s >= 60) ESP_LOGI(TAG, "moved after %" PRIu32 " min still (gyro %.1f dps, da %.0f mg)", s_still_s / 60, gyro, dacc);
+            s_still_s = 0; s_warned = false; adopt_ref();
+        }
         return;
     }
+    adopt_ref();
+    s_moving_s = 0;
     s_still_s++;
+    if (s_still_s % 60 == 0) ESP_LOGI(TAG, "still %" PRIu32 " min (gyro %.1f dps, da %.0f mg)", s_still_s / 60, gyro, dacc);
     if (!s_warned && s_still_s + IDLE_WARN_S >= limit_s) {
         s_warned = true;
         ESP_LOGW(TAG, "still for %" PRIu32 " min: switching off in %d s unless moved (idle_off_min %" PRId32 ")", s_still_s / 60, IDLE_WARN_S, g_cfg.idle_off_min);

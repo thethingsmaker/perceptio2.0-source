@@ -129,10 +129,13 @@ No battery connected: no charging states (the charger toggles; see `power_batter
 - **Idle auto power-off** (0.3.69, `src/idle.c`): a racket lying still for parameter `idle_off_min` minutes (Power
   group, default 20, 0 = never, applied immediately) switches off exactly like the button hold (`IDLE: still for N
   min: switching off`, backend `shutdown` with reason `idle`). "Still" is judged once a second from the sampler's
-  last sample: |gyro| < 5 °/s, |a| within 60 mg of 1 g and the gravity vector unchanged since the second before; one
-  moving second restarts the count (a racket carried in a bag never qualifies). The count is held at zero while the
-  racket is in use, so it can never fire mid-way: recording, a phone subscribed to LIVE, a tunnel request in the last
-  2 min, upload, OTA, WiFi test, cable in (bench boards stay reachable), IMU not delivering. The last 30 s the LED
+  last sample. The **gyro** is the signal (|gyro| < 5 °/s; handling always rotates the racket, a vibrating surface
+  shakes it without rotating it, noise ≈ 0.2 °/s); the accelerometer only catches a reposition between two samples
+  (gravity vector moved > 150 mg on an axis). One moving second is ignored (knock, vibration spike); **two in a row**
+  restart the count (0.3.70) — a racket carried in a bag never qualifies. The count is held at zero while the racket
+  is in use, so it can never fire mid-way: recording, a phone subscribed to LIVE, a tunnel request **other than the
+  app's status/ota polls** in the last 2 min, upload, OTA, WiFi test, cable in (bench boards stay reachable), IMU not
+  delivering. Once a minute `IDLE: still N min (gyro x.x dps, da y mg)` shows the margins. The last 30 s the LED
   blinks amber (`IDLE: still for N min: switching off in 30 s unless moved`); moving it cancels.
 - **Boot report** (0.3.34): a breadcrumb in RTC memory (survives resets and deep sleep, not ship mode) tells at the
   next boot how the last switch-off ended:

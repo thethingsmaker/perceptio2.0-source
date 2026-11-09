@@ -86,7 +86,7 @@ static const ble_uuid128_t s_uuid_rsp = P2_UUID(0x00, 0x03);
 static const ble_uuid128_t s_uuid_live = P2_UUID(0x00, 0x04);
 static uint16_t s_req_handle, s_rsp_handle, s_live_handle;
 static volatile bool s_rsp_subscribed, s_live_subscribed;
-static volatile int64_t s_last_req_us;           /* last tunnel request: the phone's user is busy with the racket (idle.c) */
+static volatile int64_t s_last_req_us;           /* last tunnel request other than a background poll: the user is busy with the racket (idle.c) */
 
 /* LIVE (0.3.65): raw IMU samples, decimated, one self-contained frame per notification every LIVE_PERIOD_MS:
  *   uint32 seq (index of the first sample, absolute), uint16 n, uint8 div, uint8 sample_bytes, then n x imu_sample_t.
@@ -240,7 +240,6 @@ static void api_task(void *arg)
     for (;;) {
         xSemaphoreTake(s_req_ready, portMAX_DELAY);
         int64_t t0 = esp_timer_get_time();
-        s_last_req_us = t0;
         cJSON *j = cJSON_ParseWithLength((char *)s_req, s_req_len);
         cJSON *jid = j ? cJSON_GetObjectItem(j, "id") : NULL, *jm = j ? cJSON_GetObjectItem(j, "m") : NULL,
               *jp = j ? cJSON_GetObjectItem(j, "p") : NULL, *jb = j ? cJSON_GetObjectItem(j, "b") : NULL;
@@ -252,6 +251,8 @@ static void api_task(void *arg)
         } else {
             char *body = jb ? cJSON_PrintUnformatted(jb) : NULL;
             bool json = false;
+            /* user activity for idle.c — NOT the app's background polls (status every 5 s, ota every 60 s) */
+            if (strcmp(jp->valuestring, "/api/v1/status") && strcmp(jp->valuestring, "/api/v1/ota")) s_last_req_us = t0;
             int st = http_loopback(jm->valuestring, jp->valuestring, body, http, BLE_MSG_MAX, &json);
             if (st < 0) answer(id, 502, NULL, "web server unreachable");
             else if (!json && http[0]) answer(id, 415, NULL, "not JSON over BLE");

@@ -33,6 +33,6 @@ typedef struct { bool bonded, pairing_open, connected, encrypted; int window_s; 
 esp_err_t ble_init(const char *device_id);   /* after the web server is up; starts advertising once the host syncs */
 bool      ble_connected(void);
 bool      ble_live_active(void);             /* a phone is subscribed to LIVE (0.3.69: idle timer paused) */
-int64_t   ble_last_request_us(void);         /* esp_timer time of the last tunnel request, 0 = none (idle.c: user activity) */
+int64_t   ble_last_request_us(void);         /* esp_timer time of the last tunnel request that was not a status/ota poll, 0 = none (idle.c) */
 void      ble_status(ble_status_t *st);
 esp_err_t ble_unpair(void);                  /* erase the bond(s), reopen the window, drop the phone; ESP_ERR_INVALID_STATE while recording */

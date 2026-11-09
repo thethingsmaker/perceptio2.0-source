@@ -103,9 +103,12 @@ One driver per file under `src/` with its header in `include/`: `board` (pins, b
 Since refactor step 3 (0.3.28–0.3.32) `main.c` is init + a 100 ms tick, and the policies live in `button` (gestures),
 `netwatch` (backend-unreachable seconds), `led_policy` (LED priority) and `power_mgr` (ON/OFF/CHARGE-IDLE, charge gate, low battery,
 boot report). Main passes them hooks (backend reachable, prepare-for-off, …), so they do not depend on cloud/store.
-`idle` (0.3.69) is the idle auto power-off: 1 s tick on the sampler's last sample (still = |gyro| < 5 °/s, |a| ≈ 1 g, gravity
-vector unchanged); counts to parameter `idle_off_min` (default 20) then `app_power_off("idle")`; held at zero while recording,
-LIVE subscribed, tunnel request < 2 min ago, upload, OTA, WiFi test or cable in. Add any new "in use" state to `busy_reason()`.
+`idle` (0.3.69/70) is the idle auto power-off: 1 s tick on the sampler's last sample (still = |gyro| < 5 °/s and gravity vector
+moved < 150 mg; gyro is the vibration-proof signal), two consecutive moving seconds restart the count; counts to parameter
+`idle_off_min` (default 20) then `app_power_off("idle")`; held at zero while recording, LIVE subscribed, tunnel request < 2 min
+ago, upload, OTA, WiFi test or cable in. Add any new "in use" state to `busy_reason()`. **The app's background polls
+(`GET /api/v1/status` every 5 s, `/ota` every 60 s) are excluded in ble.c — 0.3.69 counted them and never switched off; any
+new polling endpoint in the app must be added to that exclusion.**
 Versions 0.3.66–0.3.68 were built with `FW_VERSION_STR` still "0.3.65" (bump forgotten) — those boards report 0.3.65.
 
 Sensitivities come from the ST driver, never fs/32768: accel 0.488 mg/LSB @±16 g; **gyro 0.035 × FS mdps/LSB (140 @±4000)**;
