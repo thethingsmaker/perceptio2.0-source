@@ -38,6 +38,7 @@
 #include "button.h"
 #include "factory.h"
 #include "netwatch.h"
+#include "idle.h"
 #include "ble.h"
 #include "led_policy.h"
 #include "power_mgr.h"
@@ -137,6 +138,7 @@ static void led_update(const bq25180_status_t *bq)
         .safety_fault  = bq->safety_fault,
         .charge_paused = s_chg_paused,
         .net_bad       = netwatch_backend_bad_s() >= 20,   /* 20 s grace for a normal (re)connect */
+        .idle_warn     = idle_warning(),
     };
     led_policy_apply(&in);
 }
@@ -297,6 +299,7 @@ void app_main(void)
             bq25180_status_t b1; power_charger_status(&b1);
             power_battery_tick(b1.vin_pgood, b1.chg == BQ_CHG_CC || b1.chg == BQ_CHG_CV, b1.chg == BQ_CHG_DONE);
             power_mgr_battery_tick(b1.vin_pgood);     /* low-battery shutdown (power_mgr.c) */
+            idle_tick_1s();                           /* lying still for idle_off_min -> power off (idle.c) */
             led_update(&b1);
         }
         if (tick % 100 == 0) {                        /* status line every 10 s (it is also shipped to the backend log) */

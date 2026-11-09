@@ -34,7 +34,8 @@ Schema entry:
 - `reboot`: `true` → saved now, applied at next boot (show a "restart to apply" hint); `false` → applied immediately
 - Values are persisted in NVS on the device. **Writes are refused during a capture session** in the production firmware (HTTP 409) — the app should retry after the session ends.
 
-Current parameters: `dev_name, odr_hz, xl_fs_g, gy_fs_dps, hg_fs_g, session_max, led_bright, web_ui, wifi_ps, ws_hz, selftest, selftest_full, ichg_ma, ilim_ma, chg_tmax_c, chg_tmin_c`.
+Current parameters: `dev_name, odr_hz, xl_fs_g, gy_fs_dps, hg_fs_g, session_max, led_bright, web_ui, wifi_ps, ws_hz, selftest, selftest_full, ichg_ma, ilim_ma, chg_tmax_c, chg_tmin_c, bat_off_mv, idle_off_min, tz, log_serial, log_remote, ota_repo`.
+`idle_off_min` (Power, min, default 20, 0 = never): switch off after lying still this long; paused while recording, LIVE streaming, app requests, upload, OTA, WiFi test or cable in (README "Power").
 
 **`web_ui` (0.3.66, default off, reboot):** off = the HTTP server accepts loopback connections only (the BLE tunnel), no
 page, no `/ws`, no mDNS — the LAN cannot reach this API at all; the Android app over BLE is the UI. On = the lab web page

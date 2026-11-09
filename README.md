@@ -11,6 +11,7 @@ src/power.c         VBAT (eFuse-calibrated ADC), BQ /INT -> button hook
 src/button.c        button gestures: double press -> start/stop recording, hold 3 s -> power off
 src/factory.c       factory reset: backend command, or button held through a power-on + confirmation press
 src/power_mgr.c     power states (ON / OFF = ship mode / CHARGE-IDLE), charge gate, low-battery shutdown, boot report
+src/idle.c          idle auto power-off: lying still for `idle_off_min` minutes -> switch off (paused while in use)
 src/netwatch.c      backend watch: seconds the backend has been unreachable (LED)
 src/led_policy.c    status LED priority list (see LED)
 src/diag.c          temporary: once-a-minute stack report (DIAG line), idle only
@@ -102,6 +103,7 @@ One colour at a time, highest priority first; re-evaluated every second. Each ch
 | 1 | identify (backend command) / recording refused | white fast blink |
 | 2 | self-test failed | red fast blink, 3 s after boot |
 | 3 | recording | red breathing |
+| 3b | idle: lying still, switching off in 30 s (0.3.69) | amber blink (2 Hz) |
 | 4 | charge fault: paused by temperature, safety timer, cable + cell but not charging for 10 s | yellow fast blink |
 | 5 | WiFi or backend unreachable ≥ 20 s | blue slow blink (1 Hz) |
 | 6 | charge done (cable + cell) | yellow solid |
@@ -124,6 +126,14 @@ No battery connected: no charging states (the charger toggles; see `power_batter
 - **Low battery** (0.3.33): on battery, when the averaged VBAT stays at or below parameter `bat_off_mv` (Power group,
   default 3300 mV, range 3100–4200) for 30 s, the board switches off as above (`PWR: battery low …`). Without it a
   flat board browns out at the charger's 3.0 V BUVLO, the unloaded cell recovers, it boots, and repeats.
+- **Idle auto power-off** (0.3.69, `src/idle.c`): a racket lying still for parameter `idle_off_min` minutes (Power
+  group, default 20, 0 = never, applied immediately) switches off exactly like the button hold (`IDLE: still for N
+  min: switching off`, backend `shutdown` with reason `idle`). "Still" is judged once a second from the sampler's
+  last sample: |gyro| < 5 °/s, |a| within 60 mg of 1 g and the gravity vector unchanged since the second before; one
+  moving second restarts the count (a racket carried in a bag never qualifies). The count is held at zero while the
+  racket is in use, so it can never fire mid-way: recording, a phone subscribed to LIVE, a tunnel request in the last
+  2 min, upload, OTA, WiFi test, cable in (bench boards stay reachable), IMU not delivering. The last 30 s the LED
+  blinks amber (`IDLE: still for N min: switching off in 30 s unless moved`); moving it cancels.
 - **Boot report** (0.3.34): a breadcrumb in RTC memory (survives resets and deep sleep, not ship mode) tells at the
   next boot how the last switch-off ended:
   - `PWR: last power-off reached ship mode (supply was cut)` — normal.

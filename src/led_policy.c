@@ -11,6 +11,7 @@ led_mode_t led_policy_decide(const led_inputs_t *in)
     bool chg_fault = in->plugged && in->battery && (in->charge_paused || in->safety_fault || notchg_s >= 10);
     if (in->boot_fail)                           return LED_BOOT_FAIL;
     if (in->recording)                           return LED_RECORDING;
+    if (in->idle_warn)                           return LED_IDLE_WARN;    /* amber blink: lying still, off in 30 s */
     if (chg_fault)                               return LED_CHARGE_FAULT;
     if (in->net_bad)                             return LED_NET_SEARCH;   /* slow blink: no AP yet */
     if (in->plugged && in->battery && in->done)  return LED_FULL;
@@ -29,7 +30,7 @@ void led_policy_apply(const led_inputs_t *in)
             [LED_OFF] = "off", [LED_BOOT] = "booting", [LED_OK] = "ok (green)", [LED_BOOT_FAIL] = "self-test failed",
             [LED_RECORDING] = "recording", [LED_CHARGING] = "charging",
             [LED_CHARGE_FAULT] = "charge fault", [LED_FULL] = "charged", [LED_IDENTIFY] = "identify",
-            [LED_NET_SEARCH] = "no network/backend (blue slow blink)",
+            [LED_NET_SEARCH] = "no network/backend (blue slow blink)", [LED_IDLE_WARN] = "idle: switching off soon (amber blink)",
         };
         ESP_LOGI(TAG, "%s", (unsigned)m < sizeof N / sizeof N[0] && N[m] ? N[m] : "?");
         last = m;

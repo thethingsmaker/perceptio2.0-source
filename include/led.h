@@ -19,6 +19,7 @@ typedef enum {
     LED_FULL,          /* yellow solid — charge done */
     LED_IDENTIFY,      /* white fast blink — "find me" */
     LED_NET_SEARCH,    /* blue slow blink, 1 Hz — WiFi or backend down >= 20 s (0.3.35) */
+    LED_IDLE_WARN,     /* amber blink, 2 Hz — lying still, switching off in 30 s (0.3.69, idle.h) */
 } led_mode_t;
 
 esp_err_t led_start(void);               /* after lp5810_init() */

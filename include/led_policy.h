@@ -25,6 +25,7 @@ typedef struct {
     bool safety_fault;     /* BQ safety timer expired */
     bool charge_paused;    /* temperature gate */
     bool net_bad;          /* backend unreachable for >= 20 s (netwatch) */
+    bool idle_warn;        /* idle_warning(): switching off for inactivity within 30 s */
 } led_inputs_t;
 
 led_mode_t led_policy_decide(const led_inputs_t *in);   /* call once a second: it counts the 10 s "not charging" */

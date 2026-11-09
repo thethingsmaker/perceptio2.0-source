@@ -86,6 +86,7 @@ static const ble_uuid128_t s_uuid_rsp = P2_UUID(0x00, 0x03);
 static const ble_uuid128_t s_uuid_live = P2_UUID(0x00, 0x04);
 static uint16_t s_req_handle, s_rsp_handle, s_live_handle;
 static volatile bool s_rsp_subscribed, s_live_subscribed;
+static volatile int64_t s_last_req_us;           /* last tunnel request: the phone's user is busy with the racket (idle.c) */
 
 /* LIVE (0.3.65): raw IMU samples, decimated, one self-contained frame per notification every LIVE_PERIOD_MS:
  *   uint32 seq (index of the first sample, absolute), uint16 n, uint8 div, uint8 sample_bytes, then n x imu_sample_t.
@@ -239,6 +240,7 @@ static void api_task(void *arg)
     for (;;) {
         xSemaphoreTake(s_req_ready, portMAX_DELAY);
         int64_t t0 = esp_timer_get_time();
+        s_last_req_us = t0;
         cJSON *j = cJSON_ParseWithLength((char *)s_req, s_req_len);
         cJSON *jid = j ? cJSON_GetObjectItem(j, "id") : NULL, *jm = j ? cJSON_GetObjectItem(j, "m") : NULL,
               *jp = j ? cJSON_GetObjectItem(j, "p") : NULL, *jb = j ? cJSON_GetObjectItem(j, "b") : NULL;
@@ -386,6 +388,8 @@ esp_err_t ble_init(const char *device_id)
 }
 
 bool ble_connected(void) { return s_conn; }
+bool ble_live_active(void) { return s_conn && s_live_subscribed; }
+int64_t ble_last_request_us(void) { return s_last_req_us; }
 
 void ble_status(ble_status_t *st)
 {

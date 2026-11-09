@@ -20,8 +20,8 @@
 
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 3
-#define FW_VERSION_PATCH 68
-#define FW_VERSION_STR   "0.3.68"
+#define FW_VERSION_PATCH 69
+#define FW_VERSION_STR   "0.3.69"
 
 /* ------------------------------------------------------------------ */
 /* WiFi list                                                           */
@@ -78,6 +78,7 @@ typedef struct {
     int32_t chg_tmax_c;      /* pause charging when board (IMU die) temp exceeds this: ambient ~45 C + ~23 K self-heating */
     int32_t chg_tmin_c;      /* pause charging below this: ambient ~0 C + self-heating (Li-ion plating risk) */
     int32_t bat_off_mv;      /* on battery: switch off (ship mode) when the averaged VBAT stays at/below this for 30 s */
+    int32_t idle_off_min;    /* switch off after N minutes lying still (idle.h); 0 = never */
     char    tz[48];          /* POSIX TZ string for local time display, e.g. "CET-1CEST,M3.5.0,M10.5.0/3" */
     bool    log_serial;      /* log lines on the USB serial console (off for the ship build) */
     int32_t log_remote;      /* minimum level shipped to the backend: 0 none, 1 error, 2 warning, 3 info */
